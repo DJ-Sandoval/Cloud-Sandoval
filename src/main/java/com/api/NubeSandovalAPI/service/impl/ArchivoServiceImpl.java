@@ -19,7 +19,6 @@ import com.api.NubeSandovalAPI.utils.ThumbnailUtil;
 import jakarta.transaction.Transactional;
 import org.springframework.stereotype.Service;
 import org.springframework.web.multipart.MultipartFile;
-import reactor.core.publisher.Flux;
 import reactor.core.scheduler.Schedulers;
 
 import java.io.IOException;
@@ -177,33 +176,29 @@ public class ArchivoServiceImpl implements ArchivoService {
     }
 
     @Override
-    public Flux<ExplorerResponseDTO> explorar(Long directorioId) {
+    public ExplorerResponseDTO explorar(Long directorioId) {
 
-        return Flux.defer(() -> {
+        List<Directorio> directorios = directorioRepository.findByPadreId(directorioId);
 
-            List<Directorio> directorios = directorioRepository.findByPadreId(directorioId);
+        List<Archivo> archivos = archivoRepository.findByDirectorioId(directorioId);
 
-            List<Archivo> archivos = archivoRepository.findByDirectorioId(directorioId);
+        List<DirectorioDTO> dirDTO = directorios.stream()
+                .map(d -> {
+                    DirectorioDTO dto = new DirectorioDTO();
+                    dto.setId(d.getId());
+                    dto.setNombre(d.getNombre());
+                    return dto;
+                })
+                .toList();
 
-            List<DirectorioDTO> dirDTO = directorios.stream()
-                    .map(d -> {
-                        DirectorioDTO dto = new DirectorioDTO();
-                        dto.setId(d.getId());
-                        dto.setNombre(d.getNombre());
-                        return dto;
-                    })
-                    .toList();
+        List<ArchivoResponseDTO> archivosDTO = archivos.stream()
+                .map(this::mapToDTO)
+                .toList();
 
-            List<ArchivoResponseDTO> archivosDTO = archivos.stream()
-                    .map(this::mapToDTO)
-                    .toList();
+        ExplorerResponseDTO response = new ExplorerResponseDTO();
+        response.setDirectorios(dirDTO);
+        response.setArchivos(archivosDTO);
 
-            ExplorerResponseDTO response = new ExplorerResponseDTO();
-            response.setDirectorios(dirDTO);
-            response.setArchivos(archivosDTO);
-
-            return Flux.just(response);
-
-        }).subscribeOn(Schedulers.boundedElastic()); // 🔥 CLAVE
+        return response;
     }
 }

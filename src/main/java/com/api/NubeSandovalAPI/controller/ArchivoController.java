@@ -8,7 +8,6 @@ import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.multipart.MultipartFile;
-import reactor.core.publisher.Flux;
 
 import java.util.List;
 
@@ -50,9 +49,9 @@ public class ArchivoController {
     }
 
     @GetMapping("/explorer")
-    public Flux<ExplorerResponseDTO> explorer(
+    public ResponseEntity<ExplorerResponseDTO> explorer(
             @RequestParam(required = false) Long directorioId) {
 
-        return archivoService.explorar(directorioId);
+        return ResponseEntity.ok(archivoService.explorar(directorioId));
     }
 }

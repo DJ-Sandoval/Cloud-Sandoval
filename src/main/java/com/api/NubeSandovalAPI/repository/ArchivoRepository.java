@@ -6,7 +6,6 @@ import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 import org.springframework.stereotype.Repository;
-import reactor.core.publisher.Flux;
 
 import java.util.List;
 import java.util.Optional;
@@ -24,6 +23,5 @@ public interface ArchivoRepository extends JpaRepository<Archivo, Long> {
         OR LOWER(e.nombre) LIKE LOWER(CONCAT('%', :q, '%'))
     """)
     List<Archivo> buscar(@Param("q") String query);
-    Flux<ExplorerResponseDTO> explorar(Long directorioId);
     List<Archivo> findByDirectorioId(Long directorioId);
 }
