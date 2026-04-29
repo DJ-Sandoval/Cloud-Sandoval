@@ -19,7 +19,7 @@ import com.api.NubeSandovalAPI.utils.ThumbnailUtil;
 import jakarta.transaction.Transactional;
 import org.springframework.stereotype.Service;
 import org.springframework.web.multipart.MultipartFile;
-import reactor.core.scheduler.Schedulers;
+
 
 import java.io.IOException;
 import java.nio.file.Files;
