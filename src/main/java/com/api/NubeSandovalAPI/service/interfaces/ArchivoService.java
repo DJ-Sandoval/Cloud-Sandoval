@@ -17,6 +17,16 @@ public interface ArchivoService {
     List<ArchivoResponseDTO> buscar(String query);
     byte[] obtenerThumbnail(Long archivoId);
     ExplorerResponseDTO explorar(Long directorioId);
+    String iniciarUpload();
+
+    void subirChunk(String uploadId, int chunkIndex, MultipartFile file);
+
+    ArchivoResponseDTO finalizarUpload(
+            String uploadId,
+            String nombreOriginal,
+            int totalChunks,
+            List<String> etiquetas,
+            Long directorioId);
 }
 
 

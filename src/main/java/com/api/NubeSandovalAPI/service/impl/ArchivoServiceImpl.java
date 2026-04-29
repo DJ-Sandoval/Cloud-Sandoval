@@ -13,6 +13,7 @@ import com.api.NubeSandovalAPI.repository.DirectorioRepository;
 import com.api.NubeSandovalAPI.service.exception.ArchivoDuplicadoException;
 import com.api.NubeSandovalAPI.service.interfaces.ArchivoService;
 import com.api.NubeSandovalAPI.service.interfaces.EtiquetaService;
+import com.api.NubeSandovalAPI.utils.ChunkStorageUtil;
 import com.api.NubeSandovalAPI.utils.FileStorageUtil;
 import com.api.NubeSandovalAPI.utils.HashUtil;
 import com.api.NubeSandovalAPI.utils.ThumbnailUtil;
@@ -22,6 +23,7 @@ import org.springframework.web.multipart.MultipartFile;
 
 
 import java.io.IOException;
+import java.io.InputStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
@@ -39,6 +41,7 @@ public class ArchivoServiceImpl implements ArchivoService {
     private final HashUtil hashUtil;
     private final FileStorageUtil storageUtil;
     private final ThumbnailUtil thumbnailUtil;
+    private final ChunkStorageUtil chunkStorageUtil;
 
     public ArchivoServiceImpl(
             ArchivoRepository archivoRepository,
@@ -47,7 +50,8 @@ public class ArchivoServiceImpl implements ArchivoService {
             DirectorioRepository directorioRepository,
             HashUtil hashUtil,
             FileStorageUtil storageUtil,
-            ThumbnailUtil thumbnailUtil
+            ThumbnailUtil thumbnailUtil,
+            ChunkStorageUtil chunkStorageUtil
     ) {
 
         this.archivoRepository = archivoRepository;
@@ -57,6 +61,7 @@ public class ArchivoServiceImpl implements ArchivoService {
         this.storageUtil = storageUtil;
         this.directorioRepository = directorioRepository;
         this.thumbnailUtil = thumbnailUtil;
+        this.chunkStorageUtil = chunkStorageUtil;
     }
 
     @Transactional
@@ -173,6 +178,88 @@ public class ArchivoServiceImpl implements ArchivoService {
         }
 
         return thumbnailUtil.generarThumbnail(ruta, 200, 200);
+    }
+
+    @Override
+    public String iniciarUpload() {
+        return UUID.randomUUID().toString();
+    }
+
+    @Override
+    public void subirChunk(String uploadId, int chunkIndex, MultipartFile file) {
+        chunkStorageUtil.saveChunk(uploadId, chunkIndex, file);
+    }
+
+    @Override
+    @Transactional
+    public ArchivoResponseDTO finalizarUpload(
+            String uploadId,
+            String nombreOriginal,
+            int totalChunks,
+            List<String> etiquetas,
+            Long directorioId) {
+
+        // 1. EXTENSION
+        String extension = "";
+        if (nombreOriginal.contains(".")) {
+            extension = nombreOriginal.substring(nombreOriginal.lastIndexOf("."));
+        }
+
+        String uuid = UUID.randomUUID().toString();
+        String nombreFisico = uuid + extension;
+
+        // 2. MERGE
+        Path finalPath = chunkStorageUtil.mergeChunks(uploadId, totalChunks, nombreFisico);
+
+        // 3. HASH
+        String hash;
+        try (InputStream is = Files.newInputStream(finalPath)) {
+            hash = hashUtil.calcularSHA256(is);
+        } catch (IOException e) {
+            throw new RuntimeException("Error hash");
+        }
+
+        archivoRepository.findByHash(hash).ifPresent(a -> {
+            chunkStorageUtil.deleteChunks(uploadId);
+            throw new ArchivoDuplicadoException("Archivo duplicado");
+        });
+
+        // 4. DIRECTORIO
+        Directorio directorio = null;
+        if (directorioId != null) {
+            directorio = directorioRepository.findById(directorioId)
+                    .orElseThrow(() -> new RuntimeException("Directorio no existe"));
+        }
+
+        // 5. ENTITY
+        Archivo archivo = new Archivo();
+        archivo.setNombreOriginal(nombreOriginal);
+        archivo.setNombreFisico(nombreFisico);
+        archivo.setRuta(finalPath.toString());
+        archivo.setMimeType("application/octet-stream");
+        archivo.setSize(finalPath.toFile().length());
+        archivo.setHash(hash);
+        archivo.setFechaSubida(LocalDateTime.now());
+        archivo.setDirectorio(directorio);
+
+        archivoRepository.save(archivo);
+
+        // 6. ETIQUETAS
+        List<Etiqueta> etiquetasDB = etiquetaService.obtenerOCrearEtiquetas(etiquetas);
+
+        archivoEtiquetaRepository.saveAll(
+                etiquetasDB.stream().map(et -> {
+                    ArchivoEtiqueta ae = new ArchivoEtiqueta();
+                    ae.setArchivo(archivo);
+                    ae.setEtiqueta(et);
+                    return ae;
+                }).toList()
+        );
+
+        // 7. LIMPIAR
+        chunkStorageUtil.deleteChunks(uploadId);
+
+        return mapToDTO(archivo);
     }
 
     @Override
