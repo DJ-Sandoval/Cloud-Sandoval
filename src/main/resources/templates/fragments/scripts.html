@@ -1,0 +1,635 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org">
+<body>
+<div th:fragment="scripts">
+    <script>
+        // ============ CONFIGURACIÓN ============
+        const API = {
+            ARCHIVOS: '/api/archivos',
+            DIRECTORIOS: '/api/directorios',
+            UPLOADS: '/api/uploads'
+        };
+
+        let currentFolderId = window.serverData?.currentFolderId || null;
+        let deleteTarget = null;
+        let selectedFiles = [];
+
+        // ============ INICIALIZACIÓN ============
+        document.addEventListener('DOMContentLoaded', () => {
+            loadExplorer(currentFolderId);
+            updateStorageUsage();
+            setupDragAndDrop();
+            setupGlobalClicks();
+        });
+
+        // ============ EXPLORADOR ============
+        async function loadExplorer(folderId) {
+            currentFolderId = folderId;
+            const url = folderId
+                ? `${API.ARCHIVOS}/explorer?directorioId=${folderId}`
+                : `${API.ARCHIVOS}/explorer`;
+
+            try {
+                const response = await fetch(url);
+                if (!response.ok) throw new Error('Error al cargar');
+                const data = await response.json();
+                renderExplorer(data);
+                loadBreadcrumbs(folderId);
+            } catch (error) {
+                showToast('Error al cargar el explorador', 'error');
+            }
+        }
+
+        function renderExplorer(data) {
+            const main = document.querySelector('main');
+            const container = main.querySelector('.explorer-container') || createExplorerContainer(main);
+
+            let html = '';
+
+            // Breadcrumbs se renderizan aparte
+            html += '<div id="breadcrumbContainer" class="mb-6"></div>';
+
+            // Carpetas
+            if (data.directorios?.length > 0) {
+                html += `
+                        <div class="mb-8 animate-fade-in">
+                            <h2 class="text-2xl font-bold mb-4 text-blue-400 flex items-center">
+                                <i class="fas fa-folder mr-3"></i>Carpetas
+                            </h2>
+                            <div class="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-4">
+                                ${data.directorios.map(dir => `
+                                    <div class="bg-gray-800 rounded-xl p-4 hover:bg-gray-750 hover:shadow-lg transition-all duration-200 border border-gray-700 group cursor-pointer"
+                                         onclick="navigateTo(${dir.id})"
+                                         oncontextmenu="event.preventDefault(); showContextMenu(event, 'folder', ${dir.id}, '${dir.nombre}')">
+                                        <i class="fas fa-folder text-yellow-400 text-3xl mb-3 group-hover:scale-110 transition-transform"></i>
+                                        <h3 class="text-sm font-medium text-white truncate">${dir.nombre}</h3>
+                                        <div class="flex space-x-1 mt-2 opacity-0 group-hover:opacity-100 transition-opacity">
+                                            <button onclick="event.stopPropagation(); showRenameModal('folder', ${dir.id}, '${dir.nombre}')"
+                                                    class="text-xs text-blue-400 hover:text-blue-300 p-1">
+                                                <i class="fas fa-edit"></i>
+                                            </button>
+                                            <button onclick="event.stopPropagation(); confirmDelete('folder', ${dir.id}, '${dir.nombre}')"
+                                                    class="text-xs text-red-400 hover:text-red-300 p-1">
+                                                <i class="fas fa-trash"></i>
+                                            </button>
+                                        </div>
+                                    </div>
+                                `).join('')}
+                            </div>
+                        </div>
+                    `;
+            }
+
+            // Archivos
+            if (data.archivos?.length > 0) {
+                html += `
+                        <div class="animate-slide-in">
+                            <h2 class="text-2xl font-bold mb-4 text-green-400 flex items-center">
+                                <i class="fas fa-file mr-3"></i>Archivos
+                            </h2>
+                            <div class="bg-gray-800 rounded-xl shadow-lg overflow-hidden border border-gray-700">
+                                <div class="overflow-x-auto">
+                                    <table class="min-w-full">
+                                        <thead class="bg-gray-700">
+                                            <tr>
+                                                <th class="px-6 py-3 text-left text-xs font-medium text-gray-300 uppercase">Nombre</th>
+                                                <th class="px-6 py-3 text-left text-xs font-medium text-gray-300 uppercase">Tamaño</th>
+                                                <th class="px-6 py-3 text-left text-xs font-medium text-gray-300 uppercase hidden md:table-cell">Tipo</th>
+                                                <th class="px-6 py-3 text-left text-xs font-medium text-gray-300 uppercase hidden lg:table-cell">Fecha</th>
+                                                <th class="px-6 py-3 text-right text-xs font-medium text-gray-300 uppercase">Acciones</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody class="divide-y divide-gray-700">
+                                            ${data.archivos.map(file => `
+                                                <tr class="hover:bg-gray-750 transition duration-150">
+                                                    <td class="px-6 py-4 whitespace-nowrap">
+                                                        <div class="flex items-center min-w-0">
+                                                            <i class="${getFileIcon(file.mimeType)} mr-3 flex-shrink-0"></i>
+                                                            <span class="text-sm font-medium text-white truncate max-w-[200px]"
+                                                                  title="${file.nombreOriginal}">${file.nombreOriginal}</span>
+                                                        </div>
+                                                    </td>
+                                                    <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-300">
+                                                        ${formatSize(file.size)}
+                                                    </td>
+                                                    <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-400 hidden md:table-cell">
+                                                        ${file.mimeType?.split('/')[0] || 'desconocido'}
+                                                    </td>
+                                                    <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-400 hidden lg:table-cell">
+                                                        ${file.fechaSubida ? formatDate(file.fechaSubida) : '-'}
+                                                    </td>
+                                                    <td class="px-6 py-4 whitespace-nowrap text-sm text-right">
+                                                        <div class="flex justify-end space-x-2">
+                                                            <button onclick="downloadFile(${file.id})"
+                                                                    class="text-blue-400 hover:text-blue-300 p-1" title="Descargar">
+                                                                <i class="fas fa-download"></i>
+                                                            </button>
+                                                            <button onclick="showRenameModal('file', ${file.id}, '${file.nombreOriginal}')"
+                                                                    class="text-yellow-400 hover:text-yellow-300 p-1" title="Renombrar">
+                                                                <i class="fas fa-edit"></i>
+                                                            </button>
+                                                            <button onclick="confirmDelete('file', ${file.id}, '${file.nombreOriginal}')"
+                                                                    class="text-red-400 hover:text-red-300 p-1" title="Eliminar">
+                                                                <i class="fas fa-trash"></i>
+                                                            </button>
+                                                        </div>
+                                                    </td>
+                                                </tr>
+                                            `).join('')}
+                                        </tbody>
+                                    </table>
+                                </div>
+                            </div>
+                        </div>
+                    `;
+            }
+
+            // Estado vacío
+            if (!data.directorios?.length && !data.archivos?.length) {
+                html += `
+                        <div class="text-center py-16 animate-fade-in">
+                            <i class="fas fa-folder-open text-6xl text-gray-600 mb-6"></i>
+                            <h3 class="text-xl font-medium text-gray-400 mb-3">Carpeta vacía</h3>
+                            <p class="text-gray-500 mb-8">Comienza subiendo tu primer archivo o creando una carpeta</p>
+                            <div class="flex justify-center space-x-4">
+                                <button onclick="showUploadModal()"
+                                        class="bg-blue-600 hover:bg-blue-700 text-white px-6 py-3 rounded-lg transition duration-200 flex items-center">
+                                    <i class="fas fa-file-upload mr-2"></i>Subir Archivo
+                                </button>
+                                <button onclick="showFolderModal()"
+                                        class="bg-purple-600 hover:bg-purple-700 text-white px-6 py-3 rounded-lg transition duration-200 flex items-center">
+                                    <i class="fas fa-folder-plus mr-2"></i>Nueva Carpeta
+                                </button>
+                            </div>
+                        </div>
+                    `;
+            }
+
+            container.innerHTML = html;
+        }
+
+        function createExplorerContainer(main) {
+            const container = document.createElement('div');
+            container.className = 'explorer-container max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8';
+            main.appendChild(container);
+            return container;
+        }
+
+        // ============ BREADCRUMBS ============
+        async function loadBreadcrumbs(folderId) {
+            const container = document.getElementById('breadcrumbContainer');
+            if (!container) return;
+
+            if (!folderId) {
+                container.innerHTML = '';
+                return;
+            }
+
+            try {
+                const response = await fetch(`${API.DIRECTORIOS}/breadcrumbs/${folderId}`);
+                if (!response.ok) throw new Error('Error');
+                const breadcrumbs = await response.json();
+
+                let html = `
+                        <nav class="flex items-center space-x-2 text-sm bg-gray-800 rounded-lg px-4 py-2">
+                            <a href="javascript:void(0)" onclick="navigateTo(null)"
+                               class="text-blue-400 hover:text-blue-300">
+                                <i class="fas fa-home"></i> Raíz
+                            </a>
+                    `;
+
+                breadcrumbs.forEach(crumb => {
+                    html += `
+                            <span class="text-gray-500">/</span>
+                            <a href="javascript:void(0)" onclick="navigateTo(${crumb.id})"
+                               class="text-blue-400 hover:text-blue-300">${crumb.nombre}</a>
+                        `;
+                });
+
+                html += '</nav>';
+                container.innerHTML = html;
+            } catch (error) {
+                console.error('Error loading breadcrumbs:', error);
+            }
+        }
+
+        // ============ NAVEGACIÓN ============
+        function navigateTo(folderId) {
+            history.pushState({folderId}, '', folderId ? `?folderId=${folderId}` : '/');
+            loadExplorer(folderId);
+        }
+
+        window.addEventListener('popstate', (event) => {
+            const folderId = event.state?.folderId || null;
+            loadExplorer(folderId);
+        });
+
+        // ============ OPERACIONES CON ARCHIVOS ============
+        async function uploadFiles() {
+            if (selectedFiles.length === 0) {
+                showToast('Selecciona al menos un archivo', 'warning');
+                return;
+            }
+
+            const tags = document.getElementById('uploadTags').value;
+            const progressDiv = document.getElementById('uploadProgress');
+            const progressBar = document.getElementById('progressBar');
+            const percentageSpan = document.getElementById('uploadPercentage');
+
+            progressDiv.classList.remove('hidden');
+
+            for (let i = 0; i < selectedFiles.length; i++) {
+                const file = selectedFiles[i];
+                const formData = new FormData();
+                formData.append('file', file);
+                if (currentFolderId) formData.append('directorioId', currentFolderId);
+                if (tags) {
+                    tags.split(',').map(t => t.trim()).filter(Boolean).forEach(tag => {
+                        formData.append('etiquetas', tag);
+                    });
+                }
+
+                try {
+                    const response = await fetch(API.ARCHIVOS, {
+                        method: 'POST',
+                        body: formData
+                    });
+
+                    if (!response.ok) {
+                        const error = await response.json().catch(() => ({message: 'Error'}));
+                        throw new Error(error.message || 'Error al subir');
+                    }
+
+                    const percent = Math.round(((i + 1) / selectedFiles.length) * 100);
+                    progressBar.style.width = percent + '%';
+                    percentageSpan.textContent = percent + '%';
+                } catch (error) {
+                    showToast(`Error: ${error.message}`, 'error');
+                    break;
+                }
+            }
+
+            hideUploadModal();
+            showToast('Archivos subidos exitosamente', 'success');
+            loadExplorer(currentFolderId);
+        }
+
+        async function downloadFile(fileId) {
+            window.open(`${API.ARCHIVOS}/${fileId}/download`, '_blank');
+        }
+
+        async function renameFile(fileId, newName) {
+            try {
+                const response = await fetch(`${API.ARCHIVOS}/${fileId}/rename?nuevoNombre=${encodeURIComponent(newName)}`, {
+                    method: 'PUT'
+                });
+                if (!response.ok) throw new Error('Error al renombrar');
+                showToast('Archivo renombrado exitosamente', 'success');
+                loadExplorer(currentFolderId);
+            } catch (error) {
+                showToast(error.message, 'error');
+            }
+        }
+
+        async function deleteFile(fileId) {
+            try {
+                const response = await fetch(`${API.ARCHIVOS}/${fileId}`, { method: 'DELETE' });
+                if (!response.ok) throw new Error('Error al eliminar');
+                showToast('Archivo eliminado exitosamente', 'success');
+                loadExplorer(currentFolderId);
+            } catch (error) {
+                showToast(error.message, 'error');
+            }
+        }
+
+        // ============ OPERACIONES CON CARPETAS ============
+        async function createFolder() {
+            const name = document.getElementById('folderName').value.trim();
+            if (!name) {
+                showToast('Ingresa un nombre para la carpeta', 'warning');
+                return;
+            }
+
+            const formData = new FormData();
+            formData.append('nombre', name);
+            if (currentFolderId) formData.append('padreId', currentFolderId);
+
+            try {
+                const response = await fetch(API.DIRECTORIOS, {
+                    method: 'POST',
+                    body: formData
+                });
+                if (!response.ok) throw new Error('Error al crear');
+                showToast('Carpeta creada exitosamente', 'success');
+                hideFolderModal();
+                loadExplorer(currentFolderId);
+            } catch (error) {
+                showToast(error.message, 'error');
+            }
+        }
+
+        async function renameFolder(folderId, newName) {
+            try {
+                const response = await fetch(`${API.DIRECTORIOS}/${folderId}/rename?nuevoNombre=${encodeURIComponent(newName)}`, {
+                    method: 'PUT'
+                });
+                if (!response.ok) throw new Error('Error al renombrar');
+                showToast('Carpeta renombrada exitosamente', 'success');
+                loadExplorer(currentFolderId);
+            } catch (error) {
+                showToast(error.message, 'error');
+            }
+        }
+
+        async function deleteFolder(folderId, force = false) {
+            try {
+                const response = await fetch(`${API.DIRECTORIOS}/${folderId}?forzar=${force}`, {
+                    method: 'DELETE'
+                });
+                if (!response.ok) {
+                    const error = await response.json().catch(() => ({message: 'Error'}));
+                    throw new Error(error.message || 'Error al eliminar');
+                }
+                showToast('Carpeta eliminada exitosamente', 'success');
+                loadExplorer(currentFolderId);
+            } catch (error) {
+                showToast(error.message, 'error');
+            }
+        }
+
+        // ============ BÚSQUEDA ============
+        async function searchFiles() {
+            const query = document.getElementById('searchInput').value.trim();
+            if (!query) return;
+
+            try {
+                const response = await fetch(`${API.ARCHIVOS}/buscar?q=${encodeURIComponent(query)}`);
+                if (!response.ok) throw new Error('Error');
+                const files = await response.json();
+
+                const container = document.querySelector('.explorer-container');
+                container.innerHTML = `
+                        <div class="mb-4">
+                            <button onclick="navigateTo(currentFolderId)"
+                                    class="text-blue-400 hover:text-blue-300">
+                                <i class="fas fa-arrow-left mr-2"></i>Volver al explorador
+                            </button>
+                            <span class="text-gray-400 ml-4">Resultados para: "${query}"</span>
+                        </div>
+                    `;
+
+                if (files.length > 0) {
+                    renderExplorer({ directorios: [], archivos: files });
+                } else {
+                    container.innerHTML += `
+                            <div class="text-center py-12">
+                                <i class="fas fa-search text-4xl text-gray-600 mb-4"></i>
+                                <p class="text-gray-400">No se encontraron archivos</p>
+                            </div>
+                        `;
+                }
+            } catch (error) {
+                showToast('Error en la búsqueda', 'error');
+            }
+        }
+
+        // ============ MODALES ============
+        function showUploadModal() {
+            document.getElementById('uploadModal').classList.remove('hidden');
+            resetUploadForm();
+        }
+        function hideUploadModal() {
+            document.getElementById('uploadModal').classList.add('hidden');
+        }
+        function showFolderModal() {
+            document.getElementById('folderModal').classList.remove('hidden');
+            document.getElementById('folderName').value = '';
+            document.getElementById('folderName').focus();
+        }
+        function hideFolderModal() {
+            document.getElementById('folderModal').classList.add('hidden');
+        }
+        function showRenameModal(type, id, currentName) {
+            document.getElementById('renameId').value = id;
+            document.getElementById('renameType').value = type;
+            document.getElementById('renameName').value = currentName;
+            document.getElementById('renameModal').classList.remove('hidden');
+            document.getElementById('renameName').focus();
+        }
+        function hideRenameModal() {
+            document.getElementById('renameModal').classList.add('hidden');
+        }
+        function confirmDelete(type, id, name) {
+            deleteTarget = { type, id, name };
+            document.getElementById('confirmMessage').textContent =
+                type === 'folder'
+                    ? `¿Eliminar la carpeta "${name}" y todo su contenido?`
+                    : `¿Eliminar el archivo "${name}"?`;
+            document.getElementById('confirmModal').classList.remove('hidden');
+        }
+        function hideConfirmModal() {
+            document.getElementById('confirmModal').classList.add('hidden');
+            deleteTarget = null;
+        }
+
+        function executeRename() {
+            const id = document.getElementById('renameId').value;
+            const type = document.getElementById('renameType').value;
+            const newName = document.getElementById('renameName').value.trim();
+
+            if (!newName) {
+                showToast('Ingresa un nombre', 'warning');
+                return;
+            }
+
+            hideRenameModal();
+
+            if (type === 'file') {
+                renameFile(id, newName);
+            } else {
+                renameFolder(id, newName);
+            }
+        }
+
+        function executeDelete() {
+            if (!deleteTarget) return;
+            hideConfirmModal();
+            if (deleteTarget.type === 'file') {
+                deleteFile(deleteTarget.id);
+            } else {
+                deleteFolder(deleteTarget.id, true);
+            }
+        }
+
+        // ============ DRAG & DROP ============
+        function setupDragAndDrop() {
+            const dropZone = document.getElementById('dropZone');
+
+            ['dragenter', 'dragover', 'dragleave', 'drop'].forEach(eventName => {
+                dropZone.addEventListener(eventName, (e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                });
+            });
+
+            ['dragenter', 'dragover'].forEach(eventName => {
+                dropZone.addEventListener(eventName, () => dropZone.classList.add('drag-over'));
+            });
+
+            ['dragleave', 'drop'].forEach(eventName => {
+                dropZone.addEventListener(eventName, () => dropZone.classList.remove('drag-over'));
+            });
+
+            dropZone.addEventListener('drop', (e) => {
+                handleFiles(e.dataTransfer.files);
+            });
+
+            dropZone.addEventListener('click', () => {
+                document.getElementById('fileInput').click();
+            });
+        }
+
+        function handleFileSelect(event) {
+            handleFiles(event.target.files);
+        }
+
+        function handleFiles(files) {
+            selectedFiles = Array.from(files);
+            const container = document.getElementById('selectedFiles');
+            container.innerHTML = '';
+            container.classList.remove('hidden');
+
+            selectedFiles.forEach((file, index) => {
+                const div = document.createElement('div');
+                div.className = 'flex items-center justify-between bg-gray-700 rounded-lg p-2 text-sm';
+                div.innerHTML = `
+                        <span class="truncate flex-1">
+                            <i class="${getFileIcon(file.type || '')} mr-2"></i>
+                            ${file.name}
+                            <span class="text-gray-400 ml-2">(${formatSize(file.size)})</span>
+                        </span>
+                        <button onclick="selectedFiles.splice(${index}, 1); handleFiles(selectedFiles)"
+                                class="text-red-400 hover:text-red-300 ml-2 flex-shrink-0">
+                            <i class="fas fa-times"></i>
+                        </button>
+                    `;
+                container.appendChild(div);
+            });
+
+            if (selectedFiles.length === 0) {
+                container.classList.add('hidden');
+            }
+        }
+
+        function resetUploadForm() {
+            selectedFiles = [];
+            document.getElementById('selectedFiles').classList.add('hidden');
+            document.getElementById('selectedFiles').innerHTML = '';
+            document.getElementById('uploadTags').value = '';
+            document.getElementById('uploadProgress').classList.add('hidden');
+            document.getElementById('progressBar').style.width = '0%';
+            document.getElementById('fileInput').value = '';
+        }
+
+        // ============ UTILIDADES ============
+        function setupGlobalClicks() {
+            document.addEventListener('click', (event) => {
+                const modals = ['uploadModal', 'folderModal', 'renameModal', 'confirmModal'];
+                modals.forEach(id => {
+                    const modal = document.getElementById(id);
+                    if (modal && event.target === modal) {
+                        modal.classList.add('hidden');
+                    }
+                });
+            });
+
+            document.addEventListener('keydown', (event) => {
+                if (event.key === 'Escape') {
+                    ['uploadModal', 'folderModal', 'renameModal', 'confirmModal'].forEach(id => {
+                        document.getElementById(id)?.classList.add('hidden');
+                    });
+                }
+            });
+        }
+
+        function toggleMobileMenu() {
+            document.getElementById('mobileMenu').classList.toggle('hidden');
+        }
+
+        function showToast(message, type = 'info') {
+            const container = document.getElementById('toastContainer');
+            const colors = {
+                success: 'bg-green-600 border-green-400',
+                error: 'bg-red-600 border-red-400',
+                warning: 'bg-yellow-600 border-yellow-400',
+                info: 'bg-blue-600 border-blue-400'
+            };
+
+            const toast = document.createElement('div');
+            toast.className = `${colors[type]} border-l-4 text-white px-4 py-3 rounded-lg shadow-lg animate-slide-in flex items-center justify-between`;
+            toast.innerHTML = `
+                    <span>${message}</span>
+                    <button onclick="this.parentElement.remove()" class="ml-3 hover:text-gray-200">
+                        <i class="fas fa-times"></i>
+                    </button>
+                `;
+            container.appendChild(toast);
+
+            setTimeout(() => {
+                toast.style.opacity = '0';
+                toast.style.transition = 'opacity 0.3s';
+                setTimeout(() => toast.remove(), 300);
+            }, 4000);
+        }
+
+        function getFileIcon(mimeType) {
+            if (!mimeType) return 'fas fa-file text-gray-400';
+            if (mimeType.startsWith('image/')) return 'fas fa-file-image text-green-400';
+            if (mimeType.startsWith('video/')) return 'fas fa-file-video text-purple-400';
+            if (mimeType.includes('pdf')) return 'fas fa-file-pdf text-red-400';
+            if (mimeType.includes('word') || mimeType.includes('document')) return 'fas fa-file-word text-blue-400';
+            if (mimeType.includes('excel') || mimeType.includes('sheet')) return 'fas fa-file-excel text-green-500';
+            if (mimeType.includes('zip') || mimeType.includes('rar') || mimeType.includes('7z')) return 'fas fa-file-archive text-yellow-500';
+            if (mimeType.startsWith('audio/')) return 'fas fa-file-audio text-pink-400';
+            return 'fas fa-file text-gray-400';
+        }
+
+        function formatSize(bytes) {
+            if (!bytes || bytes === 0) return '0 Bytes';
+            const k = 1024;
+            const sizes = ['Bytes', 'KB', 'MB', 'GB'];
+            const i = Math.floor(Math.log(bytes) / Math.log(k));
+            return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
+        }
+
+        function formatDate(dateString) {
+            const date = new Date(dateString);
+            return date.toLocaleDateString('es-MX', {
+                year: 'numeric',
+                month: '2-digit',
+                day: '2-digit',
+                hour: '2-digit',
+                minute: '2-digit'
+            });
+        }
+
+        async function updateStorageUsage() {
+            try {
+                const response = await fetch(`${API.ARCHIVOS}/explorer`);
+                if (!response.ok) return;
+                const data = await response.json();
+                let totalSize = 0;
+                data.archivos?.forEach(f => totalSize += f.size || 0);
+
+                const element = document.getElementById('storageUsage');
+                if (element) {
+                    element.textContent = formatSize(totalSize);
+                }
+            } catch (error) {
+                console.error('Error updating storage:', error);
+            }
+        }
+    </script>
+</div>
+</body>
+</html>

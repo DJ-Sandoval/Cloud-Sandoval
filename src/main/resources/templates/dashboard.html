@@ -1,0 +1,25 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org" lang="es">
+<head>
+    <meta charset="UTF-8">
+    <title>Explorador</title>
+</head>
+
+<body th:replace="~{layout :: layout(title='Explorador', content=~{::main})}">
+
+<main>
+    <div class="explorer-container max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+
+        <!-- Loading -->
+        <div class="flex justify-center items-center py-20">
+            <div class="text-center">
+                <i class="fas fa-spinner fa-spin text-4xl text-blue-400 mb-4"></i>
+                <p class="text-gray-400">Cargando...</p>
+            </div>
+        </div>
+
+    </div>
+</main>
+
+</body>
+</html>
