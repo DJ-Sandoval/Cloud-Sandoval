@@ -10,9 +10,16 @@
             UPLOADS: '/api/uploads'
         };
 
+        const CHUNK_SIZE = 5 * 1024 * 1024; // 5MB por chunk
+
         let currentFolderId = window.serverData?.currentFolderId || null;
         let deleteTarget = null;
         let selectedFiles = [];
+        let explorerCache = { directorios: [], archivos: [] };
+        let selectedItems = new Set(); // Para selección múltiple
+        let clipboard = null; // { type: 'file'|'folder', id, action: 'cut'|'copy' }
+        let previewIndex = -1;
+        let previewFiles = [];
 
         // ============ INICIALIZACIÓN ============
         document.addEventListener('DOMContentLoaded', () => {
@@ -20,159 +27,819 @@
             updateStorageUsage();
             setupDragAndDrop();
             setupGlobalClicks();
+            setupKeyboardShortcuts();
+            loadDirectoryTree();
         });
 
         // ============ EXPLORADOR ============
         async function loadExplorer(folderId) {
             currentFolderId = folderId;
+            selectedItems.clear();
+            updateBatchBar();
+
             const url = folderId
                 ? `${API.ARCHIVOS}/explorer?directorioId=${folderId}`
                 : `${API.ARCHIVOS}/explorer`;
+
+            showSkeleton();
 
             try {
                 const response = await fetch(url);
                 if (!response.ok) throw new Error('Error al cargar');
                 const data = await response.json();
+                explorerCache = data;
                 renderExplorer(data);
                 loadBreadcrumbs(folderId);
             } catch (error) {
                 showToast('Error al cargar el explorador', 'error');
+                showErrorState();
             }
         }
 
+        function showSkeleton() {
+            const container = document.querySelector('.explorer-container');
+            container.innerHTML = `
+                <div class="animate-pulse">
+                    <div class="h-8 bg-gray-700 rounded w-64 mb-6"></div>
+                    <div class="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-4 mb-8">
+                        ${Array(6).fill(0).map(() => `
+                            <div class="bg-gray-800 rounded-xl p-4 h-24">
+                                <div class="h-8 bg-gray-700 rounded w-8 mb-3"></div>
+                                <div class="h-3 bg-gray-700 rounded w-3/4"></div>
+                            </div>
+                        `).join('')}
+                    </div>
+                </div>
+            `;
+        }
+
+        function showErrorState() {
+            const container = document.querySelector('.explorer-container');
+            container.innerHTML = `
+                <div class="text-center py-16">
+                    <i class="fas fa-exclamation-circle text-6xl text-red-500 mb-4"></i>
+                    <h3 class="text-xl text-gray-400 mb-4">Error al cargar</h3>
+                    <button onclick="loadExplorer(currentFolderId)"
+                            class="bg-blue-600 hover:bg-blue-700 px-6 py-3 rounded-lg">
+                        <i class="fas fa-redo mr-2"></i>Reintentar
+                    </button>
+                </div>
+            `;
+        }
+
         function renderExplorer(data) {
-            const main = document.querySelector('main');
-            const container = main.querySelector('.explorer-container') || createExplorerContainer(main);
-
-            let html = '';
-
-            // Breadcrumbs se renderizan aparte
-            html += '<div id="breadcrumbContainer" class="mb-6"></div>';
+            const container = document.querySelector('.explorer-container');
+            let html = '<div id="breadcrumbContainer" class="mb-6"></div>';
 
             // Carpetas
             if (data.directorios?.length > 0) {
                 html += `
-                        <div class="mb-8 animate-fade-in">
-                            <h2 class="text-2xl font-bold mb-4 text-blue-400 flex items-center">
-                                <i class="fas fa-folder mr-3"></i>Carpetas
-                            </h2>
-                            <div class="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-4">
-                                ${data.directorios.map(dir => `
-                                    <div class="bg-gray-800 rounded-xl p-4 hover:bg-gray-750 hover:shadow-lg transition-all duration-200 border border-gray-700 group cursor-pointer"
-                                         onclick="navigateTo(${dir.id})"
-                                         oncontextmenu="event.preventDefault(); showContextMenu(event, 'folder', ${dir.id}, '${dir.nombre}')">
-                                        <i class="fas fa-folder text-yellow-400 text-3xl mb-3 group-hover:scale-110 transition-transform"></i>
-                                        <h3 class="text-sm font-medium text-white truncate">${dir.nombre}</h3>
-                                        <div class="flex space-x-1 mt-2 opacity-0 group-hover:opacity-100 transition-opacity">
-                                            <button onclick="event.stopPropagation(); showRenameModal('folder', ${dir.id}, '${dir.nombre}')"
-                                                    class="text-xs text-blue-400 hover:text-blue-300 p-1">
-                                                <i class="fas fa-edit"></i>
-                                            </button>
-                                            <button onclick="event.stopPropagation(); confirmDelete('folder', ${dir.id}, '${dir.nombre}')"
-                                                    class="text-xs text-red-400 hover:text-red-300 p-1">
-                                                <i class="fas fa-trash"></i>
-                                            </button>
-                                        </div>
+                    <div class="mb-8 animate-fade-in">
+                        <h2 class="text-2xl font-bold mb-4 text-blue-400 flex items-center">
+                            <i class="fas fa-folder mr-3"></i>Carpetas
+                            <span class="text-sm font-normal text-gray-500 ml-2">(${data.directorios.length})</span>
+                        </h2>
+                        <div class="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-4" id="foldersGrid">
+                            ${data.directorios.map(dir => `
+                                <div class="bg-gray-800 rounded-xl p-4 hover:bg-gray-750 hover:shadow-lg transition-all duration-200 border-2 border-transparent hover:border-blue-500/30 group cursor-pointer select-none"
+                                     data-type="folder" data-id="${dir.id}" data-name="${dir.nombre}"
+                                     onclick="handleItemClick(event, 'folder', ${dir.id})"
+                                     oncontextmenu="event.preventDefault(); showContextMenu(event, 'folder', ${dir.id}, '${dir.nombre}')"
+                                     ondblclick="navigateTo(${dir.id})"
+                                     draggable="true"
+                                     ondragstart="handleDragStart(event, 'folder', ${dir.id})"
+                                     ondragover="handleDragOver(event)"
+                                     ondrop="handleDrop(event, ${dir.id})">
+                                    <i class="fas fa-folder text-yellow-400 text-3xl mb-3 group-hover:scale-110 transition-transform pointer-events-none"></i>
+                                    <h3 class="text-sm font-medium text-white truncate pointer-events-none">${dir.nombre}</h3>
+                                    <div class="flex space-x-1 mt-2 opacity-0 group-hover:opacity-100 transition-opacity">
+                                        <button onclick="event.stopPropagation(); showRenameModal('folder', ${dir.id}, '${dir.nombre}')"
+                                                class="text-xs text-blue-400 hover:text-blue-300 p-1" title="Renombrar">
+                                            <i class="fas fa-edit"></i>
+                                        </button>
+                                        <button onclick="event.stopPropagation(); confirmDelete('folder', ${dir.id}, '${dir.nombre}')"
+                                                class="text-xs text-red-400 hover:text-red-300 p-1" title="Eliminar">
+                                            <i class="fas fa-trash"></i>
+                                        </button>
                                     </div>
-                                `).join('')}
-                            </div>
+                                </div>
+                            `).join('')}
                         </div>
-                    `;
+                    </div>
+                `;
             }
 
             // Archivos
             if (data.archivos?.length > 0) {
+                previewFiles = data.archivos;
                 html += `
-                        <div class="animate-slide-in">
-                            <h2 class="text-2xl font-bold mb-4 text-green-400 flex items-center">
-                                <i class="fas fa-file mr-3"></i>Archivos
-                            </h2>
-                            <div class="bg-gray-800 rounded-xl shadow-lg overflow-hidden border border-gray-700">
-                                <div class="overflow-x-auto">
-                                    <table class="min-w-full">
-                                        <thead class="bg-gray-700">
-                                            <tr>
-                                                <th class="px-6 py-3 text-left text-xs font-medium text-gray-300 uppercase">Nombre</th>
-                                                <th class="px-6 py-3 text-left text-xs font-medium text-gray-300 uppercase">Tamaño</th>
-                                                <th class="px-6 py-3 text-left text-xs font-medium text-gray-300 uppercase hidden md:table-cell">Tipo</th>
-                                                <th class="px-6 py-3 text-left text-xs font-medium text-gray-300 uppercase hidden lg:table-cell">Fecha</th>
-                                                <th class="px-6 py-3 text-right text-xs font-medium text-gray-300 uppercase">Acciones</th>
+                    <div class="animate-slide-in">
+                        <h2 class="text-2xl font-bold mb-4 text-green-400 flex items-center">
+                            <i class="fas fa-file mr-3"></i>Archivos
+                            <span class="text-sm font-normal text-gray-500 ml-2">(${data.archivos.length})</span>
+                        </h2>
+                        <div class="bg-gray-800 rounded-xl shadow-lg overflow-hidden border border-gray-700">
+                            <div class="overflow-x-auto">
+                                <table class="min-w-full">
+                                    <thead class="bg-gray-700">
+                                        <tr>
+                                            <th class="px-4 py-3 w-10">
+                                                <input type="checkbox" id="selectAll" onchange="toggleSelectAll(event)" class="rounded">
+                                            </th>
+                                            <th class="px-6 py-3 text-left text-xs font-medium text-gray-300 uppercase cursor-pointer hover:text-white" onclick="sortFiles('name')">
+                                                Nombre <i class="fas fa-sort ml-1"></i>
+                                            </th>
+                                            <th class="px-6 py-3 text-left text-xs font-medium text-gray-300 uppercase hidden md:table-cell cursor-pointer hover:text-white" onclick="sortFiles('size')">
+                                                Tamaño <i class="fas fa-sort ml-1"></i>
+                                            </th>
+                                            <th class="px-6 py-3 text-left text-xs font-medium text-gray-300 uppercase hidden lg:table-cell">Tipo</th>
+                                            <th class="px-6 py-3 text-left text-xs font-medium text-gray-300 uppercase hidden xl:table-cell cursor-pointer hover:text-white" onclick="sortFiles('date')">
+                                                Fecha <i class="fas fa-sort ml-1"></i>
+                                            </th>
+                                            <th class="px-6 py-3 text-right text-xs font-medium text-gray-300 uppercase w-32">Acciones</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody class="divide-y divide-gray-700">
+                                        ${data.archivos.map((file, index) => `
+                                            <tr class="hover:bg-gray-750 transition duration-150 cursor-pointer select-none"
+                                                data-type="file" data-id="${file.id}" data-name="${file.nombreOriginal}"
+                                                onclick="handleItemClick(event, 'file', ${file.id})"
+                                                oncontextmenu="event.preventDefault(); showContextMenu(event, 'file', ${file.id}, '${file.nombreOriginal}')"
+                                                ondblclick="previewFile(${file.id}, ${index})"
+                                                draggable="true"
+                                                ondragstart="handleDragStart(event, 'file', ${file.id})">
+                                                <td class="px-4 py-4" onclick="event.stopPropagation()">
+                                                    <input type="checkbox" class="item-checkbox rounded" data-id="${file.id}" data-type="file" onchange="toggleItemSelection(event, 'file', ${file.id})">
+                                                </td>
+                                                <td class="px-6 py-4 whitespace-nowrap">
+                                                    <div class="flex items-center min-w-0">
+                                                        <i class="${getFileIcon(file.mimeType)} mr-3 flex-shrink-0"></i>
+                                                        <span class="text-sm font-medium text-white truncate max-w-[250px]"
+                                                              title="${file.nombreOriginal}">${file.nombreOriginal}</span>
+                                                    </div>
+                                                </td>
+                                                <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-300 hidden md:table-cell">
+                                                    ${formatSize(file.size)}
+                                                </td>
+                                                <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-400 hidden lg:table-cell">
+                                                    ${file.mimeType?.split('/')[0] || 'desconocido'}
+                                                </td>
+                                                <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-400 hidden xl:table-cell">
+                                                    ${file.fechaSubida ? formatDate(file.fechaSubida) : '-'}
+                                                </td>
+                                                <td class="px-6 py-4 whitespace-nowrap text-sm text-right">
+                                                    <div class="flex justify-end space-x-1">
+                                                        <button onclick="event.stopPropagation(); previewFile(${file.id}, ${index})"
+                                                                class="text-purple-400 hover:text-purple-300 p-1" title="Previsualizar">
+                                                            <i class="fas fa-eye"></i>
+                                                        </button>
+                                                        <button onclick="event.stopPropagation(); downloadFile(${file.id})"
+                                                                class="text-blue-400 hover:text-blue-300 p-1" title="Descargar">
+                                                            <i class="fas fa-download"></i>
+                                                        </button>
+                                                        <button onclick="event.stopPropagation(); showRenameModal('file', ${file.id}, '${file.nombreOriginal}')"
+                                                                class="text-yellow-400 hover:text-yellow-300 p-1" title="Renombrar">
+                                                            <i class="fas fa-edit"></i>
+                                                        </button>
+                                                        <button onclick="event.stopPropagation(); confirmDelete('file', ${file.id}, '${file.nombreOriginal}')"
+                                                                class="text-red-400 hover:text-red-300 p-1" title="Eliminar">
+                                                            <i class="fas fa-trash"></i>
+                                                        </button>
+                                                    </div>
+                                                </td>
                                             </tr>
-                                        </thead>
-                                        <tbody class="divide-y divide-gray-700">
-                                            ${data.archivos.map(file => `
-                                                <tr class="hover:bg-gray-750 transition duration-150">
-                                                    <td class="px-6 py-4 whitespace-nowrap">
-                                                        <div class="flex items-center min-w-0">
-                                                            <i class="${getFileIcon(file.mimeType)} mr-3 flex-shrink-0"></i>
-                                                            <span class="text-sm font-medium text-white truncate max-w-[200px]"
-                                                                  title="${file.nombreOriginal}">${file.nombreOriginal}</span>
-                                                        </div>
-                                                    </td>
-                                                    <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-300">
-                                                        ${formatSize(file.size)}
-                                                    </td>
-                                                    <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-400 hidden md:table-cell">
-                                                        ${file.mimeType?.split('/')[0] || 'desconocido'}
-                                                    </td>
-                                                    <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-400 hidden lg:table-cell">
-                                                        ${file.fechaSubida ? formatDate(file.fechaSubida) : '-'}
-                                                    </td>
-                                                    <td class="px-6 py-4 whitespace-nowrap text-sm text-right">
-                                                        <div class="flex justify-end space-x-2">
-                                                            <button onclick="downloadFile(${file.id})"
-                                                                    class="text-blue-400 hover:text-blue-300 p-1" title="Descargar">
-                                                                <i class="fas fa-download"></i>
-                                                            </button>
-                                                            <button onclick="showRenameModal('file', ${file.id}, '${file.nombreOriginal}')"
-                                                                    class="text-yellow-400 hover:text-yellow-300 p-1" title="Renombrar">
-                                                                <i class="fas fa-edit"></i>
-                                                            </button>
-                                                            <button onclick="confirmDelete('file', ${file.id}, '${file.nombreOriginal}')"
-                                                                    class="text-red-400 hover:text-red-300 p-1" title="Eliminar">
-                                                                <i class="fas fa-trash"></i>
-                                                            </button>
-                                                        </div>
-                                                    </td>
-                                                </tr>
-                                            `).join('')}
-                                        </tbody>
-                                    </table>
-                                </div>
+                                        `).join('')}
+                                    </tbody>
+                                </table>
                             </div>
                         </div>
-                    `;
+                    </div>
+                `;
             }
 
             // Estado vacío
             if (!data.directorios?.length && !data.archivos?.length) {
                 html += `
-                        <div class="text-center py-16 animate-fade-in">
-                            <i class="fas fa-folder-open text-6xl text-gray-600 mb-6"></i>
-                            <h3 class="text-xl font-medium text-gray-400 mb-3">Carpeta vacía</h3>
-                            <p class="text-gray-500 mb-8">Comienza subiendo tu primer archivo o creando una carpeta</p>
-                            <div class="flex justify-center space-x-4">
-                                <button onclick="showUploadModal()"
-                                        class="bg-blue-600 hover:bg-blue-700 text-white px-6 py-3 rounded-lg transition duration-200 flex items-center">
-                                    <i class="fas fa-file-upload mr-2"></i>Subir Archivo
-                                </button>
-                                <button onclick="showFolderModal()"
-                                        class="bg-purple-600 hover:bg-purple-700 text-white px-6 py-3 rounded-lg transition duration-200 flex items-center">
-                                    <i class="fas fa-folder-plus mr-2"></i>Nueva Carpeta
-                                </button>
-                            </div>
+                    <div class="text-center py-16 animate-fade-in">
+                        <i class="fas fa-folder-open text-6xl text-gray-600 mb-6"></i>
+                        <h3 class="text-xl font-medium text-gray-400 mb-3">Carpeta vacía</h3>
+                        <p class="text-gray-500 mb-8">Arrastra archivos aquí o usa los botones</p>
+                        <div class="flex justify-center space-x-4">
+                            <button onclick="showUploadModal()"
+                                    class="bg-blue-600 hover:bg-blue-700 text-white px-6 py-3 rounded-lg transition duration-200">
+                                <i class="fas fa-file-upload mr-2"></i>Subir Archivo
+                            </button>
+                            <button onclick="showFolderModal()"
+                                    class="bg-purple-600 hover:bg-purple-700 text-white px-6 py-3 rounded-lg transition duration-200">
+                                <i class="fas fa-folder-plus mr-2"></i>Nueva Carpeta
+                            </button>
                         </div>
-                    `;
+                    </div>
+                `;
             }
 
             container.innerHTML = html;
         }
 
-        function createExplorerContainer(main) {
-            const container = document.createElement('div');
-            container.className = 'explorer-container max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8';
-            main.appendChild(container);
-            return container;
+        // ============ SELECCIÓN MÚLTIPLE ============
+        function handleItemClick(event, type, id) {
+            if (event.ctrlKey || event.metaKey) {
+                toggleItemSelection(event, type, id);
+            } else if (event.shiftKey) {
+                // Selección por rango (simplificada)
+                toggleItemSelection(event, type, id);
+            } else {
+                // Clic simple sin teclas - solo navegar si es carpeta
+                if (type === 'folder') {
+                    navigateTo(id);
+                }
+            }
+        }
+
+        function toggleItemSelection(event, type, id) {
+            const key = `${type}-${id}`;
+            if (selectedItems.has(key)) {
+                selectedItems.delete(key);
+            } else {
+                selectedItems.add(key);
+            }
+
+            // Actualizar checkbox
+            const checkbox = document.querySelector(`input[data-id="${id}"][data-type="${type}"]`);
+            if (checkbox) checkbox.checked = selectedItems.has(key);
+
+            // Actualizar estilos visuales
+            updateItemStyles();
+            updateBatchBar();
+        }
+
+        function toggleSelectAll(event) {
+            const checked = event.target.checked;
+            const checkboxes = document.querySelectorAll('.item-checkbox');
+
+            if (checked) {
+                checkboxes.forEach(cb => {
+                    cb.checked = true;
+                    selectedItems.add(`${cb.dataset.type}-${cb.dataset.id}`);
+                });
+            } else {
+                checkboxes.forEach(cb => {
+                    cb.checked = false;
+                    selectedItems.delete(`${cb.dataset.type}-${cb.dataset.id}`);
+                });
+            }
+
+            updateItemStyles();
+            updateBatchBar();
+        }
+
+        function updateItemStyles() {
+            document.querySelectorAll('[data-type="file"], [data-type="folder"]').forEach(el => {
+                const key = `${el.dataset.type}-${el.dataset.id}`;
+                if (selectedItems.has(key)) {
+                    el.classList.add('ring-2', 'ring-blue-500', 'bg-gray-700');
+                } else {
+                    el.classList.remove('ring-2', 'ring-blue-500', 'bg-gray-700');
+                }
+            });
+        }
+
+        function clearSelection() {
+            selectedItems.clear();
+            document.querySelectorAll('.item-checkbox').forEach(cb => cb.checked = false);
+            document.getElementById('selectAll').checked = false;
+            updateItemStyles();
+            updateBatchBar();
+        }
+
+        function updateBatchBar() {
+            const bar = document.getElementById('batchBar');
+            const count = document.getElementById('batchCount');
+
+            // Contar solo archivos en la selección
+            const fileCount = [...selectedItems].filter(k => k.startsWith('file-')).length;
+
+            if (fileCount > 0) {
+                bar.classList.remove('translate-y-full');
+                count.textContent = `${fileCount} archivo(s) seleccionado(s)`;
+            } else {
+                bar.classList.add('translate-y-full');
+            }
+        }
+
+        function batchDownload() {
+            [...selectedItems].forEach(key => {
+                if (key.startsWith('file-')) {
+                    const id = key.split('-')[1];
+                    window.open(`${API.ARCHIVOS}/${id}/download`, '_blank');
+                }
+            });
+        }
+
+        function batchDelete() {
+            if (selectedItems.size === 0) return;
+            deleteTarget = {
+                type: 'batch',
+                items: [...selectedItems].map(k => {
+                    const [type, id] = k.split('-');
+                    return { type, id };
+                })
+            };
+            document.getElementById('confirmMessage').textContent =
+                `¿Eliminar ${selectedItems.size} elemento(s) seleccionado(s)?`;
+            document.getElementById('confirmModal').classList.remove('hidden');
+        }
+
+        function batchMove() {
+            // Implementación simplificada - podrías mostrar un selector de carpeta
+            const targetFolder = prompt('ID de la carpeta destino (dejar vacío para raíz):');
+            if (targetFolder === null) return;
+
+            const folderId = targetFolder ? parseInt(targetFolder) : null;
+            [...selectedItems].forEach(async key => {
+                if (key.startsWith('file-')) {
+                    const id = key.split('-')[1];
+                    try {
+                        await fetch(`${API.ARCHIVOS}/${id}/move${folderId ? '?directorioId=' + folderId : ''}`, {
+                            method: 'PUT'
+                        });
+                    } catch(e) {}
+                }
+            });
+
+            showToast('Archivos movidos', 'success');
+            clearSelection();
+            loadExplorer(currentFolderId);
+        }
+
+        // ============ PREVISUALIZACIÓN ============
+        function previewFile(fileId, index) {
+            previewIndex = index;
+            const file = previewFiles[index];
+            if (!file) return;
+
+            document.getElementById('previewModal').classList.remove('hidden');
+            document.getElementById('previewName').textContent = file.nombreOriginal;
+            document.getElementById('previewSize').textContent = formatSize(file.size);
+            document.getElementById('previewIcon').className = getFileIcon(file.mimeType);
+            document.getElementById('previewDownload').href = `${API.ARCHIVOS}/${fileId}/download`;
+
+            const content = document.getElementById('previewContent');
+            const mimeType = file.mimeType || '';
+
+            if (mimeType.startsWith('image/')) {
+                content.innerHTML = `
+                    <img src="${API.ARCHIVOS}/${fileId}/download"
+                         class="max-w-full max-h-[80vh] object-contain rounded-lg"
+                         onerror="this.src='data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 width=%22200%22 height=%22200%22><rect fill=%22%23374151%22 width=%22200%22 height=%22200%22/><text fill=%22%239CA3AF%22 x=%2250%25%22 y=%2250%25%22 text-anchor=%22middle%22 dy=%22.3em%22>Error al cargar</text></svg>'">
+                `;
+            } else if (mimeType.startsWith('video/')) {
+                content.innerHTML = `
+                    <video controls class="max-w-full max-h-[80vh] rounded-lg">
+                        <source src="${API.ARCHIVOS}/${fileId}/download" type="${mimeType}">
+                        Tu navegador no soporta video
+                    </video>
+                `;
+            } else if (mimeType.startsWith('audio/')) {
+                content.innerHTML = `
+                    <div class="text-center p-8">
+                        <i class="fas fa-file-audio text-6xl text-pink-400 mb-4"></i>
+                        <audio controls class="w-full max-w-md">
+                            <source src="${API.ARCHIVOS}/${fileId}/download" type="${mimeType}">
+                        </audio>
+                    </div>
+                `;
+            } else if (mimeType.includes('pdf')) {
+                content.innerHTML = `
+                    <iframe src="${API.ARCHIVOS}/${fileId}/download"
+                            class="w-full h-[80vh] rounded-lg" frameborder="0"></iframe>
+                `;
+            } else if (mimeType.startsWith('text/') ||
+                ['application/json', 'application/xml', 'text/'].some(t => mimeType.includes(t))) {
+                fetch(`${API.ARCHIVOS}/${fileId}/download`)
+                    .then(r => r.text())
+                    .then(text => {
+                        content.innerHTML = `
+                            <pre class="bg-gray-900 text-green-400 p-6 rounded-lg max-h-[80vh] overflow-auto w-full font-mono text-sm">${escapeHtml(text)}</pre>
+                        `;
+                    });
+            } else {
+                content.innerHTML = `
+                    <div class="text-center p-8">
+                        <i class="${getFileIcon(mimeType)} text-6xl text-gray-400 mb-4"></i>
+                        <p class="text-gray-400">Vista previa no disponible</p>
+                        <a href="${API.ARCHIVOS}/${fileId}/download"
+                           class="inline-block mt-4 bg-blue-600 hover:bg-blue-700 px-6 py-3 rounded-lg">
+                            <i class="fas fa-download mr-2"></i>Descargar
+                        </a>
+                    </div>
+                `;
+            }
+
+            // Actualizar navegación
+            document.getElementById('previewPrev').classList.toggle('hidden', index <= 0);
+            document.getElementById('previewNext').classList.toggle('hidden', index >= previewFiles.length - 1);
+        }
+
+        function hidePreviewModal() {
+            document.getElementById('previewModal').classList.add('hidden');
+            document.getElementById('previewContent').innerHTML = '';
+        }
+
+        document.getElementById('previewPrev').addEventListener('click', () => {
+            if (previewIndex > 0) {
+                const file = previewFiles[previewIndex - 1];
+                previewFile(file.id, previewIndex - 1);
+            }
+        });
+
+        document.getElementById('previewNext').addEventListener('click', () => {
+            if (previewIndex < previewFiles.length - 1) {
+                const file = previewFiles[previewIndex + 1];
+                previewFile(file.id, previewIndex + 1);
+            }
+        });
+
+        // ============ MENÚ CONTEXTUAL ============
+        function showContextMenu(event, type, id, name) {
+            event.preventDefault();
+            const menu = document.getElementById('contextMenu');
+
+            let html = '';
+            if (type === 'folder') {
+                html = `
+                    <button onclick="navigateTo(${id}); hideContextMenu()" class="w-full px-4 py-2 text-left hover:bg-gray-700 flex items-center text-sm">
+                        <i class="fas fa-folder-open text-yellow-400 mr-3 w-4"></i>Abrir
+                    </button>
+                    <button onclick="showRenameModal('folder', ${id}, '${name}'); hideContextMenu()" class="w-full px-4 py-2 text-left hover:bg-gray-700 flex items-center text-sm">
+                        <i class="fas fa-edit text-blue-400 mr-3 w-4"></i>Renombrar
+                    </button>
+                    <hr class="border-gray-700 my-1">
+                    <button onclick="copyToClipboard('folder', ${id}); hideContextMenu()" class="w-full px-4 py-2 text-left hover:bg-gray-700 flex items-center text-sm">
+                        <i class="fas fa-copy text-gray-400 mr-3 w-4"></i>Copiar
+                    </button>
+                    <button onclick="cutToClipboard('folder', ${id}); hideContextMenu()" class="w-full px-4 py-2 text-left hover:bg-gray-700 flex items-center text-sm">
+                        <i class="fas fa-cut text-gray-400 mr-3 w-4"></i>Cortar
+                    </button>
+                    <hr class="border-gray-700 my-1">
+                    <button onclick="confirmDelete('folder', ${id}, '${name}'); hideContextMenu()" class="w-full px-4 py-2 text-left hover:bg-gray-700 flex items-center text-sm text-red-400">
+                        <i class="fas fa-trash mr-3 w-4"></i>Eliminar
+                    </button>
+                `;
+            } else {
+                html = `
+                    <button onclick="previewFile(${id}, previewFiles.findIndex(f => f.id === ${id})); hideContextMenu()" class="w-full px-4 py-2 text-left hover:bg-gray-700 flex items-center text-sm">
+                        <i class="fas fa-eye text-purple-400 mr-3 w-4"></i>Previsualizar
+                    </button>
+                    <button onclick="downloadFile(${id}); hideContextMenu()" class="w-full px-4 py-2 text-left hover:bg-gray-700 flex items-center text-sm">
+                        <i class="fas fa-download text-blue-400 mr-3 w-4"></i>Descargar
+                    </button>
+                    <button onclick="showRenameModal('file', ${id}, '${name}'); hideContextMenu()" class="w-full px-4 py-2 text-left hover:bg-gray-700 flex items-center text-sm">
+                        <i class="fas fa-edit text-yellow-400 mr-3 w-4"></i>Renombrar
+                    </button>
+                    <hr class="border-gray-700 my-1">
+                    <button onclick="copyToClipboard('file', ${id}); hideContextMenu()" class="w-full px-4 py-2 text-left hover:bg-gray-700 flex items-center text-sm">
+                        <i class="fas fa-copy text-gray-400 mr-3 w-4"></i>Copiar
+                    </button>
+                    <button onclick="cutToClipboard('file', ${id}); hideContextMenu()" class="w-full px-4 py-2 text-left hover:bg-gray-700 flex items-center text-sm">
+                        <i class="fas fa-cut text-gray-400 mr-3 w-4"></i>Cortar
+                    </button>
+                    <hr class="border-gray-700 my-1">
+                    <button onclick="confirmDelete('file', ${id}, '${name}'); hideContextMenu()" class="w-full px-4 py-2 text-left hover:bg-gray-700 flex items-center text-sm text-red-400">
+                        <i class="fas fa-trash mr-3 w-4"></i>Eliminar
+                    </button>
+                `;
+            }
+
+            // Si hay portapapeles, mostrar opción de pegar
+            if (clipboard && type === 'folder') {
+                html += `
+                    <hr class="border-gray-700 my-1">
+                    <button onclick="pasteFromClipboard(${id}); hideContextMenu()" class="w-full px-4 py-2 text-left hover:bg-gray-700 flex items-center text-sm text-green-400">
+                        <i class="fas fa-paste mr-3 w-4"></i>Pegar aquí
+                    </button>
+                `;
+            }
+
+            menu.innerHTML = html;
+            menu.style.top = Math.min(event.clientY, window.innerHeight - 300) + 'px';
+            menu.style.left = Math.min(event.clientX, window.innerWidth - 220) + 'px';
+            menu.classList.remove('hidden');
+        }
+
+        function hideContextMenu() {
+            document.getElementById('contextMenu').classList.add('hidden');
+        }
+
+        function copyToClipboard(type, id) {
+            clipboard = { type, id, action: 'copy' };
+            showToast('Copiado al portapapeles', 'info');
+            hideContextMenu();
+        }
+
+        function cutToClipboard(type, id) {
+            clipboard = { type, id, action: 'cut' };
+            showToast('Cortado al portapapeles', 'info');
+            hideContextMenu();
+        }
+
+        async function pasteFromClipboard(targetFolderId) {
+            if (!clipboard) return;
+            hideContextMenu();
+
+            try {
+                const endpoint = clipboard.type === 'file'
+                    ? `${API.ARCHIVOS}/${clipboard.id}/move?directorioId=${targetFolderId}`
+                    : `${API.DIRECTORIOS}/${clipboard.id}/move?padreId=${targetFolderId}`;
+
+                const response = await fetch(endpoint, { method: 'PUT' });
+                if (!response.ok) throw new Error('Error');
+
+                if (clipboard.action === 'cut') clipboard = null;
+                showToast('Pegado exitosamente', 'success');
+                loadExplorer(currentFolderId);
+            } catch(e) {
+                showToast('Error al pegar', 'error');
+            }
+        }
+
+        // ============ SUBIDA INTELIGENTE (Simple + Chunks) ============
+        async function uploadFilesSmart() {
+            if (selectedFiles.length === 0) {
+                showToast('Selecciona al menos un archivo', 'warning');
+                return;
+            }
+
+            const tags = document.getElementById('uploadTags').value;
+            const progressDiv = document.getElementById('uploadProgress');
+            const progressBar = document.getElementById('progressBar');
+            const percentageSpan = document.getElementById('uploadPercentage');
+            const statusSpan = document.getElementById('uploadStatus');
+            const chunkInfo = document.getElementById('chunkInfo');
+            const uploadBtn = document.getElementById('uploadBtn');
+
+            progressDiv.classList.remove('hidden');
+            uploadBtn.disabled = true;
+
+            let totalProgress = 0;
+
+            for (let i = 0; i < selectedFiles.length; i++) {
+                const file = selectedFiles[i];
+                statusSpan.textContent = `Subiendo ${file.name}...`;
+
+                if (file.size > CHUNK_SIZE) {
+                    // Subida por chunks
+                    await uploadFileInChunks(file, tags, (percent, info) => {
+                        const fileProgress = (i / selectedFiles.length) * 100;
+                        const chunkProgress = (percent / 100) * (100 / selectedFiles.length);
+                        totalProgress = fileProgress + chunkProgress;
+                        progressBar.style.width = totalProgress + '%';
+                        percentageSpan.textContent = Math.round(totalProgress) + '%';
+                        if (info) chunkInfo.textContent = info;
+                    });
+                } else {
+                    // Subida simple
+                    await uploadSingleFile(file, tags);
+                    totalProgress = ((i + 1) / selectedFiles.length) * 100;
+                    progressBar.style.width = totalProgress + '%';
+                    percentageSpan.textContent = Math.round(totalProgress) + '%';
+                }
+            }
+
+            uploadBtn.disabled = false;
+            hideUploadModal();
+            showToast('Archivos subidos exitosamente', 'success');
+            loadExplorer(currentFolderId);
+            updateStorageUsage();
+        }
+
+        async function uploadSingleFile(file, tags) {
+            const formData = new FormData();
+            formData.append('file', file);
+            if (currentFolderId) formData.append('directorioId', currentFolderId);
+            if (tags) {
+                tags.split(',').map(t => t.trim()).filter(Boolean).forEach(tag => {
+                    formData.append('etiquetas', tag);
+                });
+            }
+
+            const response = await fetch(API.ARCHIVOS, { method: 'POST', body: formData });
+            if (!response.ok) {
+                const error = await response.json().catch(() => ({message: 'Error'}));
+                throw new Error(error.message);
+            }
+        }
+
+        async function uploadFileInChunks(file, tags, onProgress) {
+            const totalChunks = Math.ceil(file.size / CHUNK_SIZE);
+
+            // 1. Iniciar upload
+            const initResponse = await fetch(`${API.UPLOADS}/init`, { method: 'POST' });
+            if (!initResponse.ok) throw new Error('Error iniciando upload');
+            const { uploadId } = await initResponse.json();
+
+            // 2. Subir chunks
+            for (let chunkIndex = 0; chunkIndex < totalChunks; chunkIndex++) {
+                const start = chunkIndex * CHUNK_SIZE;
+                const end = Math.min(start + CHUNK_SIZE, file.size);
+                const chunk = file.slice(start, end);
+
+                const formData = new FormData();
+                formData.append('uploadId', uploadId);
+                formData.append('chunkIndex', chunkIndex);
+                formData.append('file', chunk, file.name + '.part' + chunkIndex);
+
+                const response = await fetch(`${API.UPLOADS}/chunk`, { method: 'POST', body: formData });
+                if (!response.ok) throw new Error(`Error en chunk ${chunkIndex + 1}/${totalChunks}`);
+
+                const percent = Math.round(((chunkIndex + 1) / totalChunks) * 100);
+                onProgress(percent, `Chunk ${chunkIndex + 1}/${totalChunks}`);
+            }
+
+            // 3. Completar
+            const completeForm = new FormData();
+            completeForm.append('uploadId', uploadId);
+            completeForm.append('nombreOriginal', file.name);
+            completeForm.append('totalChunks', totalChunks);
+            if (currentFolderId) completeForm.append('directorioId', currentFolderId);
+            if (tags) {
+                tags.split(',').map(t => t.trim()).filter(Boolean).forEach(tag => {
+                    completeForm.append('etiquetas', tag);
+                });
+            }
+
+            const completeResponse = await fetch(`${API.UPLOADS}/complete`, {
+                method: 'POST',
+                body: completeForm
+            });
+            if (!completeResponse.ok) throw new Error('Error completando upload');
+        }
+
+        async function downloadFile(fileId) {
+            window.open(`${API.ARCHIVOS}/${fileId}/download`, '_blank');
+        }
+
+        // ============ ÁRBOL DE DIRECTORIOS ============
+        async function loadDirectoryTree() {
+            const sidebar = document.getElementById('treeSidebar');
+            if (!sidebar) return;
+
+            try {
+                // Obtener directorios raíz
+                const response = await fetch(API.DIRECTORIOS);
+                if (!response.ok) throw new Error('Error');
+                const directories = await response.json();
+
+                let html = '<ul class="space-y-1">';
+                // Opción raíz
+                html += `
+                    <li>
+                        <button onclick="navigateTo(null)"
+                                class="w-full text-left px-3 py-2 rounded-lg hover:bg-gray-700 flex items-center text-sm ${!currentFolderId ? 'bg-blue-600' : ''}">
+                            <i class="fas fa-home mr-2 w-4"></i>Mi Unidad
+                        </button>
+                    </li>
+                `;
+
+                for (const dir of directories) {
+                    html += await renderTreeItem(dir, 0);
+                }
+
+                html += '</ul>';
+                sidebar.innerHTML = html;
+            } catch(e) {
+                console.error('Error loading tree:', e);
+            }
+        }
+
+        async function renderTreeItem(dir, level) {
+            const padding = level * 16;
+            let html = `
+                <li>
+                    <button onclick="navigateTo(${dir.id})"
+                            class="w-full text-left pl-${3 + level * 4} pr-3 py-2 rounded-lg hover:bg-gray-700 flex items-center text-sm ${currentFolderId === dir.id ? 'bg-gray-700 ring-1 ring-blue-500' : ''}">
+                        <i class="fas fa-folder text-yellow-400 mr-2 w-4 flex-shrink-0"></i>
+                        <span class="truncate">${dir.nombre}</span>
+                    </button>
+            `;
+
+            // Intentar cargar subdirectorios
+            try {
+                const response = await fetch(`${API.DIRECTORIOS}?padreId=${dir.id}`);
+                if (response.ok) {
+                    const children = await response.json();
+                    if (children.length > 0) {
+                        html += '<ul class="ml-2">';
+                        for (const child of children) {
+                            html += await renderTreeItem(child, level + 1);
+                        }
+                        html += '</ul>';
+                    }
+                }
+            } catch(e) {}
+
+            html += '</li>';
+            return html;
+        }
+
+        // ============ DRAG & DROP EN EL EXPLORADOR ============
+        function handleDragStart(event, type, id) {
+            event.dataTransfer.setData('text/plain', JSON.stringify({ type, id }));
+            event.dataTransfer.effectAllowed = 'move';
+        }
+
+        function handleDragOver(event) {
+            event.preventDefault();
+            event.dataTransfer.dropEffect = 'move';
+            event.currentTarget.classList.add('ring-2', 'ring-blue-400');
+        }
+
+        async function handleDrop(event, targetFolderId) {
+            event.preventDefault();
+            event.currentTarget.classList.remove('ring-2', 'ring-blue-400');
+
+            try {
+                const data = JSON.parse(event.dataTransfer.getData('text/plain'));
+
+                if (data.type === 'file') {
+                    await fetch(`${API.ARCHIVOS}/${data.id}/move?directorioId=${targetFolderId}`, {
+                        method: 'PUT'
+                    });
+                }
+
+                showToast('Movido exitosamente', 'success');
+                loadExplorer(currentFolderId);
+            } catch(e) {
+                showToast('Error al mover', 'error');
+            }
+        }
+
+        // ============ ORDENAMIENTO ============
+        let sortState = { field: null, asc: true };
+
+        function sortFiles(field) {
+            if (sortState.field === field) {
+                sortState.asc = !sortState.asc;
+            } else {
+                sortState.field = field;
+                sortState.asc = true;
+            }
+
+            const sorted = [...explorerCache.archivos].sort((a, b) => {
+                let valA, valB;
+                switch(field) {
+                    case 'name':
+                        valA = a.nombreOriginal.toLowerCase();
+                        valB = b.nombreOriginal.toLowerCase();
+                        break;
+                    case 'size':
+                        valA = a.size || 0;
+                        valB = b.size || 0;
+                        break;
+                    case 'date':
+                        valA = new Date(a.fechaSubida || 0);
+                        valB = new Date(b.fechaSubida || 0);
+                        break;
+                }
+                if (valA < valB) return sortState.asc ? -1 : 1;
+                if (valA > valB) return sortState.asc ? 1 : -1;
+                return 0;
+            });
+
+            renderExplorer({ ...explorerCache, archivos: sorted });
+        }
+
+        // ============ ATAJOS DE TECLADO ============
+        function setupKeyboardShortcuts() {
+            document.addEventListener('keydown', (e) => {
+                // No ejecutar si estamos en un input
+                if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
+
+                switch(e.key) {
+                    case 'Delete':
+                        if (selectedItems.size > 0) batchDelete();
+                        break;
+                    case 'F2':
+                        if (selectedItems.size === 1) {
+                            const [key] = selectedItems;
+                            const [type, id] = key.split('-');
+                            const name = document.querySelector(`[data-type="${type}"][data-id="${id}"]`)?.dataset.name || '';
+                            showRenameModal(type, id, name);
+                        }
+                        break;
+                    case 'a':
+                        if (e.ctrlKey || e.metaKey) {
+                            e.preventDefault();
+                            document.getElementById('selectAll').click();
+                        }
+                        break;
+                    case 'Escape':
+                        clearSelection();
+                        hideContextMenu();
+                        hidePreviewModal();
+                        break;
+                }
+            });
         }
 
         // ============ BREADCRUMBS ============
@@ -191,19 +858,19 @@
                 const breadcrumbs = await response.json();
 
                 let html = `
-                        <nav class="flex items-center space-x-2 text-sm bg-gray-800 rounded-lg px-4 py-2">
-                            <a href="javascript:void(0)" onclick="navigateTo(null)"
-                               class="text-blue-400 hover:text-blue-300">
-                                <i class="fas fa-home"></i> Raíz
-                            </a>
-                    `;
+                    <nav class="flex items-center space-x-2 text-sm bg-gray-800 rounded-lg px-4 py-2 overflow-x-auto">
+                        <a href="javascript:void(0)" onclick="navigateTo(null)"
+                           class="text-blue-400 hover:text-blue-300 flex-shrink-0">
+                            <i class="fas fa-home"></i> Raíz
+                        </a>
+                `;
 
                 breadcrumbs.forEach(crumb => {
                     html += `
-                            <span class="text-gray-500">/</span>
-                            <a href="javascript:void(0)" onclick="navigateTo(${crumb.id})"
-                               class="text-blue-400 hover:text-blue-300">${crumb.nombre}</a>
-                        `;
+                        <span class="text-gray-500 flex-shrink-0">/</span>
+                        <a href="javascript:void(0)" onclick="navigateTo(${crumb.id})"
+                           class="text-blue-400 hover:text-blue-300 truncate max-w-[150px]">${crumb.nombre}</a>
+                    `;
                 });
 
                 html += '</nav>';
@@ -215,6 +882,7 @@
 
         // ============ NAVEGACIÓN ============
         function navigateTo(folderId) {
+            clearSelection();
             history.pushState({folderId}, '', folderId ? `?folderId=${folderId}` : '/');
             loadExplorer(folderId);
         }
@@ -224,58 +892,27 @@
             loadExplorer(folderId);
         });
 
-        // ============ OPERACIONES CON ARCHIVOS ============
-        async function uploadFiles() {
-            if (selectedFiles.length === 0) {
-                showToast('Selecciona al menos un archivo', 'warning');
+        // ============ OPERACIONES SIMPLES (mantener las existentes) ============
+        async function createFolder() {
+            const name = document.getElementById('folderName').value.trim();
+            if (!name) {
+                showToast('Ingresa un nombre para la carpeta', 'warning');
                 return;
             }
 
-            const tags = document.getElementById('uploadTags').value;
-            const progressDiv = document.getElementById('uploadProgress');
-            const progressBar = document.getElementById('progressBar');
-            const percentageSpan = document.getElementById('uploadPercentage');
+            const formData = new FormData();
+            formData.append('nombre', name);
+            if (currentFolderId) formData.append('padreId', currentFolderId);
 
-            progressDiv.classList.remove('hidden');
-
-            for (let i = 0; i < selectedFiles.length; i++) {
-                const file = selectedFiles[i];
-                const formData = new FormData();
-                formData.append('file', file);
-                if (currentFolderId) formData.append('directorioId', currentFolderId);
-                if (tags) {
-                    tags.split(',').map(t => t.trim()).filter(Boolean).forEach(tag => {
-                        formData.append('etiquetas', tag);
-                    });
-                }
-
-                try {
-                    const response = await fetch(API.ARCHIVOS, {
-                        method: 'POST',
-                        body: formData
-                    });
-
-                    if (!response.ok) {
-                        const error = await response.json().catch(() => ({message: 'Error'}));
-                        throw new Error(error.message || 'Error al subir');
-                    }
-
-                    const percent = Math.round(((i + 1) / selectedFiles.length) * 100);
-                    progressBar.style.width = percent + '%';
-                    percentageSpan.textContent = percent + '%';
-                } catch (error) {
-                    showToast(`Error: ${error.message}`, 'error');
-                    break;
-                }
+            try {
+                const response = await fetch(API.DIRECTORIOS, { method: 'POST', body: formData });
+                if (!response.ok) throw new Error('Error al crear');
+                showToast('Carpeta creada exitosamente', 'success');
+                hideFolderModal();
+                loadExplorer(currentFolderId);
+            } catch (error) {
+                showToast(error.message, 'error');
             }
-
-            hideUploadModal();
-            showToast('Archivos subidos exitosamente', 'success');
-            loadExplorer(currentFolderId);
-        }
-
-        async function downloadFile(fileId) {
-            window.open(`${API.ARCHIVOS}/${fileId}/download`, '_blank');
         }
 
         async function renameFile(fileId, newName) {
@@ -291,43 +928,6 @@
             }
         }
 
-        async function deleteFile(fileId) {
-            try {
-                const response = await fetch(`${API.ARCHIVOS}/${fileId}`, { method: 'DELETE' });
-                if (!response.ok) throw new Error('Error al eliminar');
-                showToast('Archivo eliminado exitosamente', 'success');
-                loadExplorer(currentFolderId);
-            } catch (error) {
-                showToast(error.message, 'error');
-            }
-        }
-
-        // ============ OPERACIONES CON CARPETAS ============
-        async function createFolder() {
-            const name = document.getElementById('folderName').value.trim();
-            if (!name) {
-                showToast('Ingresa un nombre para la carpeta', 'warning');
-                return;
-            }
-
-            const formData = new FormData();
-            formData.append('nombre', name);
-            if (currentFolderId) formData.append('padreId', currentFolderId);
-
-            try {
-                const response = await fetch(API.DIRECTORIOS, {
-                    method: 'POST',
-                    body: formData
-                });
-                if (!response.ok) throw new Error('Error al crear');
-                showToast('Carpeta creada exitosamente', 'success');
-                hideFolderModal();
-                loadExplorer(currentFolderId);
-            } catch (error) {
-                showToast(error.message, 'error');
-            }
-        }
-
         async function renameFolder(folderId, newName) {
             try {
                 const response = await fetch(`${API.DIRECTORIOS}/${folderId}/rename?nuevoNombre=${encodeURIComponent(newName)}`, {
@@ -335,6 +935,17 @@
                 });
                 if (!response.ok) throw new Error('Error al renombrar');
                 showToast('Carpeta renombrada exitosamente', 'success');
+                loadExplorer(currentFolderId);
+            } catch (error) {
+                showToast(error.message, 'error');
+            }
+        }
+
+        async function deleteFile(fileId) {
+            try {
+                const response = await fetch(`${API.ARCHIVOS}/${fileId}`, { method: 'DELETE' });
+                if (!response.ok) throw new Error('Error al eliminar');
+                showToast('Archivo eliminado exitosamente', 'success');
                 loadExplorer(currentFolderId);
             } catch (error) {
                 showToast(error.message, 'error');
@@ -357,7 +968,6 @@
             }
         }
 
-        // ============ BÚSQUEDA ============
         async function searchFiles() {
             const query = document.getElementById('searchInput').value.trim();
             if (!query) return;
@@ -366,28 +976,16 @@
                 const response = await fetch(`${API.ARCHIVOS}/buscar?q=${encodeURIComponent(query)}`);
                 if (!response.ok) throw new Error('Error');
                 const files = await response.json();
-
-                const container = document.querySelector('.explorer-container');
-                container.innerHTML = `
-                        <div class="mb-4">
-                            <button onclick="navigateTo(currentFolderId)"
-                                    class="text-blue-400 hover:text-blue-300">
-                                <i class="fas fa-arrow-left mr-2"></i>Volver al explorador
-                            </button>
-                            <span class="text-gray-400 ml-4">Resultados para: "${query}"</span>
-                        </div>
-                    `;
-
-                if (files.length > 0) {
-                    renderExplorer({ directorios: [], archivos: files });
-                } else {
-                    container.innerHTML += `
-                            <div class="text-center py-12">
-                                <i class="fas fa-search text-4xl text-gray-600 mb-4"></i>
-                                <p class="text-gray-400">No se encontraron archivos</p>
-                            </div>
-                        `;
-                }
+                renderExplorer({ directorios: [], archivos: files });
+                document.getElementById('breadcrumbContainer').innerHTML = `
+                    <div class="mb-4">
+                        <button onclick="navigateTo(currentFolderId)"
+                                class="text-blue-400 hover:text-blue-300">
+                            <i class="fas fa-arrow-left mr-2"></i>Volver
+                        </button>
+                        <span class="text-gray-400 ml-4">Resultados: "${query}" (${files.length})</span>
+                    </div>
+                `;
             } catch (error) {
                 showToast('Error en la búsqueda', 'error');
             }
@@ -415,16 +1013,25 @@
             document.getElementById('renameName').value = currentName;
             document.getElementById('renameModal').classList.remove('hidden');
             document.getElementById('renameName').focus();
+            document.getElementById('renameName').select();
         }
         function hideRenameModal() {
             document.getElementById('renameModal').classList.add('hidden');
         }
         function confirmDelete(type, id, name) {
             deleteTarget = { type, id, name };
-            document.getElementById('confirmMessage').textContent =
-                type === 'folder'
-                    ? `¿Eliminar la carpeta "${name}" y todo su contenido?`
-                    : `¿Eliminar el archivo "${name}"?`;
+            const msg = document.getElementById('confirmMessage');
+            const title = document.getElementById('confirmTitle');
+
+            if (type === 'batch') {
+                title.textContent = '¿Eliminar elementos seleccionados?';
+                msg.textContent = `Se eliminarán ${deleteTarget.items.length} elemento(s) permanentemente`;
+            } else if (type === 'folder') {
+                msg.textContent = `¿Eliminar la carpeta "${name}" y todo su contenido?`;
+            } else {
+                msg.textContent = `¿Eliminar el archivo "${name}"?`;
+            }
+
             document.getElementById('confirmModal').classList.remove('hidden');
         }
         function hideConfirmModal() {
@@ -444,26 +1051,31 @@
 
             hideRenameModal();
 
-            if (type === 'file') {
-                renameFile(id, newName);
-            } else {
-                renameFolder(id, newName);
-            }
+            if (type === 'file') renameFile(id, newName);
+            else renameFolder(id, newName);
         }
 
-        function executeDelete() {
+        async function executeDelete() {
             if (!deleteTarget) return;
             hideConfirmModal();
-            if (deleteTarget.type === 'file') {
-                deleteFile(deleteTarget.id);
+
+            if (deleteTarget.type === 'batch') {
+                for (const item of deleteTarget.items) {
+                    if (item.type === 'file') await deleteFile(item.id);
+                    else await deleteFolder(item.id, true);
+                }
+                clearSelection();
+            } else if (deleteTarget.type === 'file') {
+                await deleteFile(deleteTarget.id);
             } else {
-                deleteFolder(deleteTarget.id, true);
+                await deleteFolder(deleteTarget.id, true);
             }
         }
 
-        // ============ DRAG & DROP ============
+        // ============ DRAG & DROP UPLOAD ============
         function setupDragAndDrop() {
             const dropZone = document.getElementById('dropZone');
+            if (!dropZone) return;
 
             ['dragenter', 'dragover', 'dragleave', 'drop'].forEach(eventName => {
                 dropZone.addEventListener(eventName, (e) => {
@@ -503,16 +1115,17 @@
                 const div = document.createElement('div');
                 div.className = 'flex items-center justify-between bg-gray-700 rounded-lg p-2 text-sm';
                 div.innerHTML = `
-                        <span class="truncate flex-1">
-                            <i class="${getFileIcon(file.type || '')} mr-2"></i>
-                            ${file.name}
-                            <span class="text-gray-400 ml-2">(${formatSize(file.size)})</span>
-                        </span>
-                        <button onclick="selectedFiles.splice(${index}, 1); handleFiles(selectedFiles)"
-                                class="text-red-400 hover:text-red-300 ml-2 flex-shrink-0">
-                            <i class="fas fa-times"></i>
-                        </button>
-                    `;
+                    <span class="truncate flex-1">
+                        ${file.size > CHUNK_SIZE ? '<i class="fas fa-cubes text-yellow-400 mr-2" title="Subida por chunks"></i>' : ''}
+                        <i class="${getFileIcon(file.type || '')} mr-2"></i>
+                        ${file.name}
+                        <span class="text-gray-400 ml-2">(${formatSize(file.size)})</span>
+                    </span>
+                    <button onclick="selectedFiles.splice(${index}, 1); handleFiles(selectedFiles)"
+                            class="text-red-400 hover:text-red-300 ml-2 flex-shrink-0">
+                        <i class="fas fa-times"></i>
+                    </button>
+                `;
                 container.appendChild(div);
             });
 
@@ -529,12 +1142,19 @@
             document.getElementById('uploadProgress').classList.add('hidden');
             document.getElementById('progressBar').style.width = '0%';
             document.getElementById('fileInput').value = '';
+            document.getElementById('uploadBtn').disabled = false;
         }
 
         // ============ UTILIDADES ============
         function setupGlobalClicks() {
             document.addEventListener('click', (event) => {
-                const modals = ['uploadModal', 'folderModal', 'renameModal', 'confirmModal'];
+                // Cerrar menú contextual
+                if (!event.target.closest('#contextMenu')) {
+                    hideContextMenu();
+                }
+
+                // Cerrar modales al hacer clic fuera
+                const modals = ['uploadModal', 'folderModal', 'renameModal', 'confirmModal', 'previewModal'];
                 modals.forEach(id => {
                     const modal = document.getElementById(id);
                     if (modal && event.target === modal) {
@@ -545,9 +1165,10 @@
 
             document.addEventListener('keydown', (event) => {
                 if (event.key === 'Escape') {
-                    ['uploadModal', 'folderModal', 'renameModal', 'confirmModal'].forEach(id => {
+                    ['uploadModal', 'folderModal', 'renameModal', 'confirmModal', 'previewModal'].forEach(id => {
                         document.getElementById(id)?.classList.add('hidden');
                     });
+                    hideContextMenu();
                 }
             });
         }
@@ -558,6 +1179,8 @@
 
         function showToast(message, type = 'info') {
             const container = document.getElementById('toastContainer');
+            if (!container) return;
+
             const colors = {
                 success: 'bg-green-600 border-green-400',
                 error: 'bg-red-600 border-red-400',
@@ -568,11 +1191,11 @@
             const toast = document.createElement('div');
             toast.className = `${colors[type]} border-l-4 text-white px-4 py-3 rounded-lg shadow-lg animate-slide-in flex items-center justify-between`;
             toast.innerHTML = `
-                    <span>${message}</span>
-                    <button onclick="this.parentElement.remove()" class="ml-3 hover:text-gray-200">
-                        <i class="fas fa-times"></i>
-                    </button>
-                `;
+                <span>${message}</span>
+                <button onclick="this.parentElement.remove()" class="ml-3 hover:text-gray-200">
+                    <i class="fas fa-times"></i>
+                </button>
+            `;
             container.appendChild(toast);
 
             setTimeout(() => {
@@ -597,7 +1220,7 @@
         function formatSize(bytes) {
             if (!bytes || bytes === 0) return '0 Bytes';
             const k = 1024;
-            const sizes = ['Bytes', 'KB', 'MB', 'GB'];
+            const sizes = ['Bytes', 'KB', 'MB', 'GB', 'TB'];
             const i = Math.floor(Math.log(bytes) / Math.log(k));
             return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
         }
@@ -605,12 +1228,15 @@
         function formatDate(dateString) {
             const date = new Date(dateString);
             return date.toLocaleDateString('es-MX', {
-                year: 'numeric',
-                month: '2-digit',
-                day: '2-digit',
-                hour: '2-digit',
-                minute: '2-digit'
+                year: 'numeric', month: '2-digit', day: '2-digit',
+                hour: '2-digit', minute: '2-digit'
             });
+        }
+
+        function escapeHtml(text) {
+            const div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML;
         }
 
         async function updateStorageUsage() {
@@ -620,11 +1246,7 @@
                 const data = await response.json();
                 let totalSize = 0;
                 data.archivos?.forEach(f => totalSize += f.size || 0);
-
-                const element = document.getElementById('storageUsage');
-                if (element) {
-                    element.textContent = formatSize(totalSize);
-                }
+                document.getElementById('storageUsage').textContent = formatSize(totalSize);
             } catch (error) {
                 console.error('Error updating storage:', error);
             }

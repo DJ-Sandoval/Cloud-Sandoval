@@ -52,7 +52,7 @@ public class ArchivoController {
                 .body(imagen);
     }
 
-    @GetMapping("/templates/explorer")
+    @GetMapping("/explorer")
     public ResponseEntity<ExplorerResponseDTO> explorer(
             @RequestParam(required = false) Long directorioId) {
 
