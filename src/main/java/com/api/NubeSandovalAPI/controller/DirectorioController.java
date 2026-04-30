@@ -11,6 +11,7 @@ import java.util.List;
 
 @RestController
 @RequestMapping("/api/directorios")
+@CrossOrigin("*")
 public class DirectorioController {
 
     private final DirectorioService directorioService;
@@ -43,5 +44,25 @@ public class DirectorioController {
     @GetMapping("/breadcrumbs/{id}")
     public ResponseEntity<List<DirectorioDTO>> breadcrumbs(@PathVariable Long id) {
         return ResponseEntity.ok(directorioService.obtenerBreadcrumb(id));
+    }
+
+    @GetMapping("/{id}")
+    public ResponseEntity<DirectorioDTO> obtener(@PathVariable Long id) {
+        return ResponseEntity.ok(directorioService.obtenerDirectorio(id));
+    }
+
+    @PutMapping("/{id}/rename")
+    public ResponseEntity<DirectorioDTO> renombrar(
+            @PathVariable Long id,
+            @RequestParam String nuevoNombre) {
+        return ResponseEntity.ok(directorioService.renombrarDirectorio(id, nuevoNombre));
+    }
+
+    @DeleteMapping("/{id}")
+    public ResponseEntity<Void> eliminar(
+            @PathVariable Long id,
+            @RequestParam(defaultValue = "false") boolean forzar) {
+        directorioService.eliminarDirectorio(id, forzar);
+        return ResponseEntity.noContent().build();
     }
 }

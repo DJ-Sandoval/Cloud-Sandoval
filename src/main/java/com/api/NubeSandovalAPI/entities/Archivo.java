@@ -7,6 +7,8 @@ import lombok.NoArgsConstructor;
 import lombok.Setter;
 
 import java.time.LocalDateTime;
+import java.util.ArrayList;
+import java.util.List;
 
 @Entity
 @Table(name = "archivos")
@@ -33,8 +35,12 @@ public class Archivo {
     private String hash;
 
     private LocalDateTime fechaSubida;
+    private LocalDateTime lastModified;
 
     @ManyToOne
     @JoinColumn(name = "directorio_id")
     private Directorio directorio;
+
+    @OneToMany(mappedBy = "archivo", cascade = CascadeType.ALL, orphanRemoval = true)
+    private List<ArchivoEtiqueta> etiquetas = new ArrayList<>();
 }

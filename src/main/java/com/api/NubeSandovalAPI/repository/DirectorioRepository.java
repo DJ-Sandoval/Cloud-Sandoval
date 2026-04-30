@@ -7,11 +7,26 @@ import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
 import java.util.List;
+import java.util.Optional;
 
 public interface DirectorioRepository extends JpaRepository<Directorio, Long> {
 
     List<Directorio> findByPadreId(Long padreId);
+    @Query("SELECT d FROM Directorio d WHERE d.padre IS NULL")
+    List<Directorio> findRaices(); // NUEVO
+    @Query("SELECT d FROM Directorio d WHERE d.padre.id = :padreId " +
+            "AND LOWER(d.nombre) = LOWER(:nombre)")
+    Optional<Directorio> findByPadreIdAndNombreIgnoreCase(
+            @Param("padreId") Long padreId,
+            @Param("nombre") String nombre); // NUEVO
 
+    @Query("SELECT d FROM Directorio d WHERE d.padre IS NULL " +
+            "AND LOWER(d.nombre) = LOWER(:nombre)")
+    Optional<Directorio> findByPadreIsNullAndNombreIgnoreCase(
+            @Param("nombre") String nombre); // NUEVO
+
+    @Query("SELECT COUNT(d) FROM Directorio d WHERE d.padre.id = :padreId")
+    Long countByPadreId(@Param("padreId") Long padreId); // NUEVO
     // 🌳 CTE: obtener árbol completo desde un nodo
     @Query(value = """
         WITH RECURSIVE arbol AS (

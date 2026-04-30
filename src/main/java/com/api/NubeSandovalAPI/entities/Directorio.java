@@ -21,12 +21,10 @@ public class Directorio {
     private Long id;
 
     private String nombre;
+    private LocalDateTime fechaCreacion;
+    private LocalDateTime lastModified;
 
     @ManyToOne
     @JoinColumn(name = "id_directorio_padre")
     private Directorio padre;
-
-    private LocalDateTime fechaCreacion;
-
-
 }

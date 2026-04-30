@@ -2,9 +2,11 @@ package com.api.NubeSandovalAPI.service.interfaces;
 
 import com.api.NubeSandovalAPI.dto.ArchivoResponseDTO;
 import com.api.NubeSandovalAPI.dto.ExplorerResponseDTO;
+import org.springframework.core.io.Resource;
 import jakarta.transaction.Transactional;
 import org.springframework.web.multipart.MultipartFile;
 
+import java.io.IOException;
 import java.util.List;
 
 public interface ArchivoService {
@@ -27,6 +29,13 @@ public interface ArchivoService {
             int totalChunks,
             List<String> etiquetas,
             Long directorioId);
+
+    ArchivoResponseDTO renombrarArchivo(Long archivoId, String nuevoNombre) throws IOException;
+    ArchivoResponseDTO moverArchivo(Long archivoId, Long nuevoDirectorioId);
+    void eliminarArchivo(Long archivoId) throws IOException;
+    Resource descargarArchivo(Long archivoId) throws IOException;
+    ArchivoResponseDTO obtenerArchivo(Long archivoId);
+    List<ArchivoResponseDTO> listarArchivosRaiz();
 }
 
 

@@ -18,6 +18,7 @@ import com.api.NubeSandovalAPI.utils.FileStorageUtil;
 import com.api.NubeSandovalAPI.utils.HashUtil;
 import com.api.NubeSandovalAPI.utils.ThumbnailUtil;
 import jakarta.transaction.Transactional;
+import org.springframework.core.io.Resource;
 import org.springframework.stereotype.Service;
 import org.springframework.web.multipart.MultipartFile;
 
@@ -150,15 +151,7 @@ public class ArchivoServiceImpl implements ArchivoService {
                 .toList();
     }
 
-    private ArchivoResponseDTO mapToDTO(Archivo archivo) {
-        ArchivoResponseDTO dto = new ArchivoResponseDTO();
-        dto.setId(archivo.getId());
-        dto.setNombreOriginal(archivo.getNombreOriginal());
-        dto.setMimeType(archivo.getMimeType());
-        dto.setSize(archivo.getSize());
-        dto.setRuta(archivo.getRuta());
-        return dto;
-    }
+
 
     @Override
     public byte[] obtenerThumbnail(Long archivoId) {
@@ -287,5 +280,123 @@ public class ArchivoServiceImpl implements ArchivoService {
         response.setArchivos(archivosDTO);
 
         return response;
+    }
+
+    // ========== NUEVOS MÉTODOS ==========
+
+    @Override
+    @Transactional
+    public ArchivoResponseDTO renombrarArchivo(Long archivoId, String nuevoNombre) throws IOException {
+        Archivo archivo = archivoRepository.findById(archivoId)
+                .orElseThrow(() -> new RuntimeException("Archivo no encontrado"));
+
+        // Validar que no exista otro archivo con el mismo nombre en el mismo directorio
+        if (archivo.getDirectorio() != null) {
+            archivoRepository.findByDirectorioIdAndNombreOriginalIgnoreCase(
+                            archivo.getDirectorio().getId(), nuevoNombre)
+                    .ifPresent(a -> {
+                        throw new RuntimeException("Ya existe un archivo con ese nombre en este directorio");
+                    });
+        } else {
+            archivoRepository.findByDirectorioIsNullAndNombreOriginalIgnoreCase(nuevoNombre)
+                    .ifPresent(a -> {
+                        throw new RuntimeException("Ya existe un archivo con ese nombre en la raíz");
+                    });
+        }
+
+        // Renombrar archivo físico
+        Path oldPath = Paths.get(archivo.getRuta());
+        Path newPath = oldPath.resolveSibling(nuevoNombre);
+        Files.move(oldPath, newPath);
+
+        // Actualizar entidad
+        archivo.setNombreOriginal(nuevoNombre);
+        archivo.setRuta(newPath.toString());
+        archivo.setLastModified(LocalDateTime.now());
+
+        Archivo actualizado = archivoRepository.save(archivo);
+        return mapToDTO(actualizado);
+    }
+
+    @Override
+    @Transactional
+    public ArchivoResponseDTO moverArchivo(Long archivoId, Long nuevoDirectorioId) {
+        Archivo archivo = archivoRepository.findById(archivoId)
+                .orElseThrow(() -> new RuntimeException("Archivo no encontrado"));
+
+        Directorio nuevoDirectorio = null;
+        if (nuevoDirectorioId != null) {
+            nuevoDirectorio = directorioRepository.findById(nuevoDirectorioId)
+                    .orElseThrow(() -> new RuntimeException("Directorio destino no encontrado"));
+        }
+
+        archivo.setDirectorio(nuevoDirectorio);
+        archivo.setLastModified(LocalDateTime.now());
+
+        Archivo actualizado = archivoRepository.save(archivo);
+        return mapToDTO(actualizado);
+    }
+
+    @Override
+    @Transactional
+    public void eliminarArchivo(Long archivoId) throws IOException {
+        Archivo archivo = archivoRepository.findById(archivoId)
+                .orElseThrow(() -> new RuntimeException("Archivo no encontrado"));
+
+        // Eliminar archivo físico
+        Path filePath = Paths.get(archivo.getRuta());
+        Files.deleteIfExists(filePath);
+
+        // Eliminar de BD (etiquetas se eliminan en cascada)
+        archivoRepository.delete(archivo);
+    }
+
+    @Override
+    public Resource descargarArchivo(Long archivoId) throws IOException {
+        Archivo archivo = archivoRepository.findById(archivoId)
+                .orElseThrow(() -> new RuntimeException("Archivo no encontrado"));
+
+        Path filePath = Paths.get(archivo.getRuta());
+        Resource resource = new org.springframework.core.io.UrlResource(filePath.toUri());
+
+        if (resource.exists() && resource.isReadable()) {
+            return resource;
+        } else {
+            throw new RuntimeException("No se puede leer el archivo");
+        }
+    }
+
+    @Override
+    public ArchivoResponseDTO obtenerArchivo(Long archivoId) {
+        Archivo archivo = archivoRepository.findById(archivoId)
+                .orElseThrow(() -> new RuntimeException("Archivo no encontrado"));
+        return mapToDTO(archivo);
+    }
+
+    @Override
+    public List<ArchivoResponseDTO> listarArchivosRaiz() {
+        return archivoRepository.findByDirectorioIsNull()
+                .stream()
+                .map(this::mapToDTO)
+                .toList();
+    }
+
+    // Actualiza el método mapToDTO existente
+    private ArchivoResponseDTO mapToDTO(Archivo archivo) {
+        ArchivoResponseDTO dto = new ArchivoResponseDTO();
+        dto.setId(archivo.getId());
+        dto.setNombreOriginal(archivo.getNombreOriginal());
+        dto.setMimeType(archivo.getMimeType());
+        dto.setSize(archivo.getSize());
+        dto.setRuta(archivo.getRuta());
+        dto.setFechaSubida(archivo.getFechaSubida());
+        dto.setLastModified(archivo.getLastModified());
+
+        if (archivo.getDirectorio() != null) {
+            dto.setDirectorioId(archivo.getDirectorio().getId());
+            dto.setDirectorioNombre(archivo.getDirectorio().getNombre());
+        }
+
+        return dto;
     }
 }

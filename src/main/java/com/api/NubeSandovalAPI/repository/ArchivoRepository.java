@@ -24,4 +24,19 @@ public interface ArchivoRepository extends JpaRepository<Archivo, Long> {
     """)
     List<Archivo> buscar(@Param("q") String query);
     List<Archivo> findByDirectorioId(Long directorioId);
+    List<Archivo> findByDirectorioIsNull();
+
+    @Query("SELECT a FROM Archivo a WHERE a.directorio.id = :directorioId " +
+            "AND LOWER(a.nombreOriginal) = LOWER(:nombre)")
+    Optional<Archivo> findByDirectorioIdAndNombreOriginalIgnoreCase(
+            @Param("directorioId") Long directorioId,
+            @Param("nombre") String nombre);
+
+    @Query("SELECT a FROM Archivo a WHERE a.directorio IS NULL " +
+            "AND LOWER(a.nombreOriginal) = LOWER(:nombre)")
+    Optional<Archivo> findByDirectorioIsNullAndNombreOriginalIgnoreCase(
+            @Param("nombre") String nombre);
+
+    @Query("SELECT COUNT(a) FROM Archivo a WHERE a.directorio.id = :directorioId")
+    Long countByDirectorioId(@Param("directorioId") Long directorioId);
 }
