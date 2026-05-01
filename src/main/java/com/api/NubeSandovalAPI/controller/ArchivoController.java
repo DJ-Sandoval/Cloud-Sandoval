@@ -112,4 +112,35 @@ public class ArchivoController {
     public ResponseEntity<List<ArchivoResponseDTO>> listarRaiz() {
         return ResponseEntity.ok(archivoService.listarArchivosRaiz());
     }
+
+    @GetMapping("/{id}/preview")
+    public ResponseEntity<?> preview(@PathVariable Long id) {
+        try {
+            ArchivoResponseDTO info = archivoService.obtenerArchivo(id);
+            byte[] previewContent = archivoService.obtenerPreview(id);
+
+            if (previewContent == null) {
+                return ResponseEntity.noContent().build();
+            }
+
+            // Si es HTML (texto, excel), devolver como texto
+            MediaType contentType;
+            if (info.getMimeType().startsWith("image/") ||
+                    info.getMimeType().equals("application/pdf")) {
+                contentType = MediaType.IMAGE_PNG;
+            } else {
+                contentType = MediaType.TEXT_HTML;
+            }
+
+            return ResponseEntity.ok()
+                    .contentType(contentType)
+                    .header(HttpHeaders.CONTENT_DISPOSITION,
+                            "inline; filename=\"" + info.getNombreOriginal() + "\"")
+                    .body(previewContent);
+
+        } catch (Exception e) {
+            return ResponseEntity.status(HttpStatus.UNSUPPORTED_MEDIA_TYPE)
+                    .body("Preview no disponible: " + e.getMessage());
+        }
+    }
 }

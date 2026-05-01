@@ -36,6 +36,7 @@ public interface ArchivoService {
     Resource descargarArchivo(Long archivoId) throws IOException;
     ArchivoResponseDTO obtenerArchivo(Long archivoId);
     List<ArchivoResponseDTO> listarArchivosRaiz();
+    byte[] obtenerPreview(Long archivoId);
 }
 
 

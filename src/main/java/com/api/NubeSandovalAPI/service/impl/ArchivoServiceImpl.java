@@ -13,10 +13,7 @@ import com.api.NubeSandovalAPI.repository.DirectorioRepository;
 import com.api.NubeSandovalAPI.service.exception.ArchivoDuplicadoException;
 import com.api.NubeSandovalAPI.service.interfaces.ArchivoService;
 import com.api.NubeSandovalAPI.service.interfaces.EtiquetaService;
-import com.api.NubeSandovalAPI.utils.ChunkStorageUtil;
-import com.api.NubeSandovalAPI.utils.FileStorageUtil;
-import com.api.NubeSandovalAPI.utils.HashUtil;
-import com.api.NubeSandovalAPI.utils.ThumbnailUtil;
+import com.api.NubeSandovalAPI.utils.*;
 import jakarta.transaction.Transactional;
 import org.springframework.core.io.Resource;
 import org.springframework.stereotype.Service;
@@ -43,6 +40,7 @@ public class ArchivoServiceImpl implements ArchivoService {
     private final FileStorageUtil storageUtil;
     private final ThumbnailUtil thumbnailUtil;
     private final ChunkStorageUtil chunkStorageUtil;
+    private final PreviewUtil previewUtil;
 
     public ArchivoServiceImpl(
             ArchivoRepository archivoRepository,
@@ -52,7 +50,8 @@ public class ArchivoServiceImpl implements ArchivoService {
             HashUtil hashUtil,
             FileStorageUtil storageUtil,
             ThumbnailUtil thumbnailUtil,
-            ChunkStorageUtil chunkStorageUtil
+            ChunkStorageUtil chunkStorageUtil,
+            PreviewUtil previewUtil
     ) {
 
         this.archivoRepository = archivoRepository;
@@ -63,6 +62,7 @@ public class ArchivoServiceImpl implements ArchivoService {
         this.directorioRepository = directorioRepository;
         this.thumbnailUtil = thumbnailUtil;
         this.chunkStorageUtil = chunkStorageUtil;
+        this.previewUtil = previewUtil;
     }
 
     @Transactional
@@ -163,6 +163,11 @@ public class ArchivoServiceImpl implements ArchivoService {
 
         if (!Files.exists(ruta)) {
             throw new RuntimeException("Archivo físico no existe");
+        }
+
+        // Si es PDF, generar thumbnail de la primera página
+        if ("application/pdf".equals(archivo.getMimeType())) {
+            return previewUtil.generarPreview(ruta, archivo.getMimeType());
         }
 
         // Validar MIME
@@ -290,27 +295,47 @@ public class ArchivoServiceImpl implements ArchivoService {
         Archivo archivo = archivoRepository.findById(archivoId)
                 .orElseThrow(() -> new RuntimeException("Archivo no encontrado"));
 
-        // Validar que no exista otro archivo con el mismo nombre en el mismo directorio
+        // 1. EXTRAER EXTENSIÓN ORIGINAL
+        String nombreOriginal = archivo.getNombreOriginal();
+        String extension = "";
+        if (nombreOriginal.contains(".")) {
+            extension = nombreOriginal.substring(nombreOriginal.lastIndexOf("."));
+        }
+
+        // 2. CONSTRUIR NUEVO NOMBRE COMPLETO CON EXTENSIÓN
+        String nuevoNombreCompleto = nuevoNombre + extension;
+
+        // 3. VALIDAR QUE NO EXISTA OTRO ARCHIVO CON EL MISMO NOMBRE
         if (archivo.getDirectorio() != null) {
             archivoRepository.findByDirectorioIdAndNombreOriginalIgnoreCase(
-                            archivo.getDirectorio().getId(), nuevoNombre)
+                            archivo.getDirectorio().getId(), nuevoNombreCompleto)
                     .ifPresent(a -> {
-                        throw new RuntimeException("Ya existe un archivo con ese nombre en este directorio");
+                        if (!a.getId().equals(archivoId)) { // Evitar conflicto consigo mismo
+                            throw new RuntimeException("Ya existe un archivo con ese nombre en este directorio");
+                        }
                     });
         } else {
-            archivoRepository.findByDirectorioIsNullAndNombreOriginalIgnoreCase(nuevoNombre)
+            archivoRepository.findByDirectorioIsNullAndNombreOriginalIgnoreCase(nuevoNombreCompleto)
                     .ifPresent(a -> {
-                        throw new RuntimeException("Ya existe un archivo con ese nombre en la raíz");
+                        if (!a.getId().equals(archivoId)) { // Evitar conflicto consigo mismo
+                            throw new RuntimeException("Ya existe un archivo con ese nombre en la raíz");
+                        }
                     });
         }
 
-        // Renombrar archivo físico
+        // 4. RENOMBRAR ARCHIVO FÍSICO (manteniendo en el mismo directorio)
         Path oldPath = Paths.get(archivo.getRuta());
-        Path newPath = oldPath.resolveSibling(nuevoNombre);
+        Path newPath = oldPath.resolveSibling(nuevoNombreCompleto);
+
+        // Verificar que el archivo físico existe antes de mover
+        if (!Files.exists(oldPath)) {
+            throw new RuntimeException("El archivo físico no existe en disco");
+        }
+
         Files.move(oldPath, newPath);
 
-        // Actualizar entidad
-        archivo.setNombreOriginal(nuevoNombre);
+        // 5. ACTUALIZAR ENTIDAD
+        archivo.setNombreOriginal(nuevoNombreCompleto);
         archivo.setRuta(newPath.toString());
         archivo.setLastModified(LocalDateTime.now());
 
@@ -379,6 +404,21 @@ public class ArchivoServiceImpl implements ArchivoService {
                 .stream()
                 .map(this::mapToDTO)
                 .toList();
+    }
+
+    // Implementar método
+    @Override
+    public byte[] obtenerPreview(Long archivoId) {
+        Archivo archivo = archivoRepository.findById(archivoId)
+                .orElseThrow(() -> new RuntimeException("Archivo no encontrado"));
+
+        Path ruta = Paths.get(archivo.getRuta());
+
+        if (!Files.exists(ruta)) {
+            throw new RuntimeException("Archivo físico no existe");
+        }
+
+        return previewUtil.generarPreview(ruta, archivo.getMimeType());
     }
 
     // Actualiza el método mapToDTO existente

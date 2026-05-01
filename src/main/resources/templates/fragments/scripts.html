@@ -407,61 +407,371 @@
 
             const mimeType = file.mimeType || '';
 
+            // MOSTRAR LOADING
+            content.innerHTML = `
+        <div class="text-center p-8">
+            <i class="fas fa-spinner fa-spin text-4xl text-blue-400 mb-4"></i>
+            <p class="text-gray-400">Cargando vista previa...</p>
+        </div>
+    `;
+
+            // === NUEVA LÓGICA DE PREVIEW SEGÚN TIPO ===
+
             if (mimeType.startsWith('image/')) {
-                content.innerHTML = `
-                    <img src="${API.ARCHIVOS}/${fileId}/download"
-                         class="max-w-full max-h-[80vh] object-contain rounded-lg"
-                         onerror="this.src='data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 width=%22200%22 height=%22200%22><rect fill=%22%23374151%22 width=%22200%22 height=%22200%22/><text fill=%22%239CA3AF%22 x=%2250%25%22 y=%2250%25%22 text-anchor=%22middle%22 dy=%22.3em%22>Error</text></svg>'">
-                `;
-            } else if (mimeType.startsWith('video/')) {
-                content.innerHTML = `
-                    <video controls class="max-w-full max-h-[80vh] rounded-lg">
-                        <source src="${API.ARCHIVOS}/${fileId}/download" type="${mimeType}">
-                    </video>
-                `;
-            } else if (mimeType.startsWith('audio/')) {
-                content.innerHTML = `
-                    <div class="text-center p-8">
-                        <i class="fas fa-file-audio text-6xl text-pink-400 mb-4"></i>
-                        <audio controls class="w-full max-w-md">
-                            <source src="${API.ARCHIVOS}/${fileId}/download" type="${mimeType}">
-                        </audio>
+                // Imágenes: cargar directamente
+                const img = new Image();
+                img.onload = () => {
+                    content.innerHTML = `
+                <img src="${API.ARCHIVOS}/${fileId}/download"
+                     class="max-w-full max-h-[80vh] object-contain rounded-lg">
+            `;
+                };
+                img.onerror = () => {
+                    content.innerHTML = '<p class="text-red-400 p-8">Error al cargar la imagen</p>';
+                };
+                img.src = `${API.ARCHIVOS}/${fileId}/download`;
+
+            } else if (mimeType === 'application/pdf') {
+                // PDF: primera página como thumbnail
+                fetch(`${API.ARCHIVOS}/${fileId}/preview`)
+                    .then(response => {
+                        if (!response.ok) throw new Error('No disponible');
+                        return response.blob();
+                    })
+                    .then(blob => {
+                        const url = URL.createObjectURL(blob);
+                        content.innerHTML = `
+                    <div class="text-center">
+                        <img src="${url}"
+                             class="max-w-full max-h-[80vh] object-contain rounded-lg mb-4"
+                             onerror="this.parentElement.innerHTML='<p class=text-red-400>Error al cargar preview del PDF</p>'">
+                        <p class="text-gray-400 text-sm mt-2">
+                            <i class="fas fa-info-circle mr-1"></i>Vista previa de la primera página
+                        </p>
                     </div>
                 `;
-            } else if (mimeType.includes('pdf')) {
-                content.innerHTML = `
-                    <iframe src="${API.ARCHIVOS}/${fileId}/download"
-                            class="w-full h-[80vh] rounded-lg"></iframe>
-                `;
-            } else if (mimeType.startsWith('text/') || mimeType.includes('json') || mimeType.includes('xml')) {
-                fetch(`${API.ARCHIVOS}/${fileId}/download`)
-                    .then(r => r.text())
-                    .then(text => {
-                        content.innerHTML = `
-                            <pre class="bg-gray-900 text-green-400 p-6 rounded-lg max-h-[80vh] overflow-auto w-full font-mono text-sm">${escapeHtml(text)}</pre>
-                        `;
                     })
                     .catch(() => {
-                        content.innerHTML = '<p class="text-red-400">Error al cargar el archivo</p>';
-                    });
-            } else {
-                content.innerHTML = `
+                        content.innerHTML = `
                     <div class="text-center p-8">
-                        <i class="${getFileIcon(mimeType)} text-6xl text-gray-400 mb-4"></i>
-                        <p class="text-gray-400">Vista previa no disponible</p>
+                        <i class="fas fa-file-pdf text-6xl text-red-400 mb-4"></i>
+                        <p class="text-gray-400 mb-4">Vista previa no disponible</p>
                         <a href="${API.ARCHIVOS}/${fileId}/download"
-                           class="inline-block mt-4 bg-blue-600 hover:bg-blue-700 px-6 py-3 rounded-lg">
-                            <i class="fas fa-download mr-2"></i>Descargar
+                           class="inline-block bg-blue-600 hover:bg-blue-700 px-6 py-3 rounded-lg">
+                            <i class="fas fa-download mr-2"></i>Descargar PDF
                         </a>
                     </div>
                 `;
+                    });
+
+            } else if (mimeType.includes('excel') ||
+                mimeType.includes('spreadsheet') ||
+                file.nombreOriginal.match(/\.(xlsx|xls|csv)$/i)) {
+                // EXCEL: Usar SheetJS para renderizar
+                previewExcelFile(fileId, file.nombreOriginal);
+
+            } else if (mimeType.startsWith('video/')) {
+                content.innerHTML = `
+            <video controls class="max-w-full max-h-[80vh] rounded-lg" autoplay>
+                <source src="${API.ARCHIVOS}/${fileId}/download" type="${mimeType}">
+                Tu navegador no soporta este video
+            </video>
+        `;
+
+            } else if (mimeType.startsWith('audio/')) {
+                content.innerHTML = `
+            <div class="text-center p-8">
+                <i class="fas fa-file-audio text-6xl text-pink-400 mb-4"></i>
+                <audio controls class="w-full max-w-md mx-auto">
+                    <source src="${API.ARCHIVOS}/${fileId}/download" type="${mimeType}">
+                </audio>
+            </div>
+        `;
+
+            } else if (mimeType.startsWith('text/') ||
+                mimeType.includes('json') ||
+                mimeType.includes('xml') ||
+                mimeType.includes('javascript')) {
+                // Archivos de texto
+                fetch(`${API.ARCHIVOS}/${fileId}/download`)
+                    .then(r => r.text())
+                    .then(text => {
+                        const truncated = text.length > 100000 ?
+                            text.substring(0, 100000) + '\n\n... (Archivo truncado, mostrando primeros 100KB)' :
+                            text;
+                        content.innerHTML = `
+                    <div class="w-full">
+                        <div class="flex justify-between items-center mb-2 px-4">
+                            <span class="text-sm text-gray-400">
+                                <i class="fas fa-file-code mr-1"></i>Vista previa de texto
+                            </span>
+                            <span class="text-sm text-gray-500">${formatSize(file.size)}</span>
+                        </div>
+                        <pre class="bg-gray-900 text-green-400 p-6 rounded-lg max-h-[70vh] overflow-auto w-full font-mono text-sm">${escapeHtml(truncated)}</pre>
+                    </div>
+                `;
+                    })
+                    .catch(() => {
+                        content.innerHTML = '<p class="text-red-400 p-8">Error al cargar el archivo de texto</p>';
+                    });
+
+            } else {
+                // Otros tipos no soportados
+                content.innerHTML = `
+            <div class="text-center p-8">
+                <i class="${getFileIcon(mimeType)} text-6xl text-gray-400 mb-4"></i>
+                <p class="text-gray-300 text-lg mb-2">${escapeHtml(file.nombreOriginal)}</p>
+                <p class="text-gray-400 mb-2">${formatSize(file.size)}</p>
+                <p class="text-gray-500 text-sm mb-6">Vista previa no disponible para este tipo de archivo</p>
+                <div class="flex justify-center space-x-4">
+                    <a href="${API.ARCHIVOS}/${fileId}/download"
+                       class="bg-blue-600 hover:bg-blue-700 px-6 py-3 rounded-lg transition duration-200">
+                        <i class="fas fa-download mr-2"></i>Descargar
+                    </a>
+                    <button onclick="window.open('${API.ARCHIVOS}/${fileId}/download', '_blank')"
+                            class="bg-green-600 hover:bg-green-700 px-6 py-3 rounded-lg transition duration-200">
+                        <i class="fas fa-external-link-alt mr-2"></i>Abrir en nueva pestaña
+                    </button>
+                </div>
+            </div>
+        `;
             }
 
-            // Navegación
+            // Navegación entre archivos
             const prevBtn = document.getElementById('previewPrev');
             const nextBtn = document.getElementById('previewNext');
             if (prevBtn) prevBtn.classList.toggle('hidden', index <= 0);
             if (nextBtn) nextBtn.classList.toggle('hidden', index >= previewFiles.length - 1);
+        }
+
+        // ============ NUEVA FUNCIÓN PARA PREVIEW DE EXCEL ============
+        function previewExcelFile(fileId, fileName) {
+            const content = document.getElementById('previewContent');
+            if (!content) return;
+
+            // Mostrar progreso
+            content.innerHTML = `
+        <div class="text-center p-8">
+            <i class="fas fa-spinner fa-spin text-4xl text-green-400 mb-4"></i>
+            <p class="text-gray-400">Procesando archivo Excel...</p>
+            <p class="text-gray-500 text-sm mt-2">${escapeHtml(fileName)}</p>
+        </div>
+    `;
+
+            fetch(`${API.ARCHIVOS}/${fileId}/download`)
+                .then(response => {
+                    if (!response.ok) throw new Error('Error al descargar');
+                    return response.arrayBuffer();
+                })
+                .then(data => {
+                    try {
+                        // Leer el workbook con SheetJS
+                        const workbook = XLSX.read(data, { type: 'array' });
+
+                        // Obtener nombres de hojas
+                        const sheetNames = workbook.SheetNames;
+
+                        if (sheetNames.length === 0) {
+                            throw new Error('El archivo no contiene hojas');
+                        }
+
+                        // Construir HTML con pestañas para cada hoja
+                        let html = `
+                    <div class="w-full max-h-[80vh] flex flex-col">
+                        <!-- Pestañas de hojas -->
+                        <div class="flex border-b border-gray-600 mb-0 overflow-x-auto" id="sheetTabs">
+                `;
+
+                        sheetNames.forEach((name, index) => {
+                            html += `
+                        <button onclick="switchExcelSheet('${fileId}', '${name.replace(/'/g, "\\'")}')"
+                                class="px-4 py-2 text-sm font-medium transition duration-200
+                                       ${index === 0 ? 'bg-gray-700 text-white border-b-2 border-green-500' : 'text-gray-400 hover:text-white hover:bg-gray-700'}"
+                                id="tab-${fileId}-${index}">
+                            <i class="fas fa-table mr-1"></i>${escapeHtml(name)}
+                        </button>
+                    `;
+                        });
+
+                        html += `
+                        </div>
+                        <!-- Contenido de la hoja activa -->
+                        <div class="overflow-auto flex-1 bg-white rounded-b-lg" id="sheetContent">
+                            ${renderExcelSheet(workbook, sheetNames[0])}
+                        </div>
+                    </div>
+                `;
+
+                        // Guardar workbook en cache para cambio de pestañas
+                        window._excelCache = window._excelCache || {};
+                        window._excelCache[fileId] = { workbook, currentSheet: sheetNames[0] };
+
+                        content.innerHTML = html;
+
+                    } catch (error) {
+                        content.innerHTML = `
+                    <div class="text-center p-8">
+                        <i class="fas fa-exclamation-triangle text-5xl text-yellow-400 mb-4"></i>
+                        <p class="text-red-400 mb-2">Error al procesar el archivo Excel</p>
+                        <p class="text-gray-500 text-sm mb-4">${escapeHtml(error.message)}</p>
+                        <a href="${API.ARCHIVOS}/${fileId}/download"
+                           class="inline-block bg-blue-600 hover:bg-blue-700 px-6 py-3 rounded-lg">
+                            <i class="fas fa-download mr-2"></i>Descargar archivo
+                        </a>
+                    </div>
+                `;
+                    }
+                })
+                .catch(error => {
+                    content.innerHTML = `
+                <div class="text-center p-8">
+                    <i class="fas fa-exclamation-triangle text-5xl text-yellow-400 mb-4"></i>
+                    <p class="text-red-400">Error al cargar el archivo</p>
+                    <p class="text-gray-500 text-sm mb-4">${escapeHtml(error.message)}</p>
+                </div>
+            `;
+                });
+        }
+
+        // ============ RENDERIZAR HOJA DE EXCEL ============
+        // ============ RENDERIZAR HOJA DE EXCEL (CORREGIDO) ============
+        function renderExcelSheet(workbook, sheetName) {
+            try {
+                const sheet = workbook.Sheets[sheetName];
+
+                // Convertir a HTML usando SheetJS
+                const htmlString = XLSX.utils.sheet_to_html(sheet, {
+                    editable: false,
+                    header: true
+                });
+
+                // Mejorar el HTML generado
+                const parser = new DOMParser();
+                const doc = parser.parseFromString(htmlString, 'text/html');
+                const table = doc.querySelector('table');
+
+                if (!table) {
+                    return '<p class="text-gray-400 p-8 text-center">Hoja vacía</p>';
+                }
+
+                // AGREGAR ESTILOS INLINE PARA TODAS LAS CELDAS
+                const allCells = table.querySelectorAll('td, th');
+                allCells.forEach(cell => {
+                    cell.style.color = '#1f2937'; // Texto oscuro
+                    cell.style.backgroundColor = '#ffffff'; // Fondo blanco
+                    cell.style.border = '1px solid #d1d5db';
+                    cell.style.padding = '8px 16px';
+                    cell.style.whiteSpace = 'nowrap';
+                    cell.style.fontSize = '14px';
+                    cell.style.fontFamily = '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif';
+                });
+
+                // Estilizar headers específicamente
+                const headers = table.querySelectorAll('thead th, thead td, tr:first-child th, tr:first-child td');
+                headers.forEach(th => {
+                    th.style.backgroundColor = '#f3f4f6';
+                    th.style.fontWeight = 'bold';
+                    th.style.color = '#111827';
+                    th.style.position = 'sticky';
+                    th.style.top = '0';
+                    th.style.zIndex = '10';
+                    th.style.borderBottom = '2px solid #9ca3af';
+                });
+
+                // Estilizar filas alternadas
+                const rows = table.querySelectorAll('tbody tr, tr');
+                rows.forEach((row, index) => {
+                    if (index > 0) { // Skip header
+                        row.style.backgroundColor = index % 2 === 0 ? '#ffffff' : '#f9fafb';
+                    }
+                });
+
+                // Hover en filas
+                table.querySelectorAll('tr').forEach(row => {
+                    row.addEventListener('mouseenter', () => {
+                        row.style.backgroundColor = '#eff6ff';
+                    });
+                    row.addEventListener('mouseleave', () => {
+                        const rowIndex = Array.from(row.parentElement.children).indexOf(row);
+                        row.style.backgroundColor = rowIndex === 0 ? '#f3f4f6' :
+                            (rowIndex % 2 === 0 ? '#ffffff' : '#f9fafb');
+                    });
+                });
+
+                // Agregar clase al contenedor de la tabla
+                const tableContainer = document.createElement('div');
+                tableContainer.style.overflow = 'auto';
+                tableContainer.style.maxHeight = '70vh';
+                tableContainer.style.backgroundColor = '#ffffff';
+                tableContainer.style.borderRadius = '8px';
+                tableContainer.style.boxShadow = '0 1px 3px rgba(0,0,0,0.1)';
+
+                // Mover la tabla dentro del contenedor
+                table.parentNode.insertBefore(tableContainer, table);
+                tableContainer.appendChild(table);
+
+                // Limitar filas visibles
+                const maxRows = 100;
+                const allRows = table.querySelectorAll('tbody tr');
+                let html = tableContainer.outerHTML;
+
+                if (allRows.length > maxRows) {
+                    // Ocultar filas extras
+                    allRows.forEach((row, index) => {
+                        if (index >= maxRows) {
+                            row.style.display = 'none';
+                        }
+                    });
+
+                    html = tableContainer.outerHTML;
+                    html += `
+                <div style="text-align: center; padding: 12px; background: #f3f4f6; color: #6b7280;
+                            font-size: 14px; border-top: 1px solid #e5e7eb; margin-top: -1px;
+                            border-radius: 0 0 8px 8px;">
+                    <i class="fas fa-info-circle" style="margin-right: 8px;"></i>
+                    Mostrando ${maxRows} de ${allRows.length} filas.
+                    <a href="#" onclick="downloadCurrentFile()"
+                       style="color: #3b82f6; text-decoration: none; font-weight: 500;">
+                        Descargar para ver completo
+                    </a>
+                </div>
+            `;
+                }
+
+                return html;
+
+            } catch (error) {
+                console.error('Error rendering sheet:', error);
+                return `<p class="text-red-400 p-8 text-center">Error al renderizar la hoja: ${escapeHtml(error.message)}</p>`;
+            }
+        }
+
+        // ============ CAMBIAR ENTRE HOJAS DE EXCEL ============
+        function switchExcelSheet(fileId, sheetName) {
+            const cache = window._excelCache?.[fileId];
+            if (!cache) return;
+
+            const content = document.getElementById('sheetContent');
+            if (!content) return;
+
+            // Actualizar pestañas
+            const tabs = document.querySelectorAll(`[id^="tab-${fileId}-"]`);
+            tabs.forEach(tab => {
+                tab.classList.remove('bg-gray-700', 'text-white', 'border-b-2', 'border-green-500');
+                tab.classList.add('text-gray-400');
+            });
+
+            // Activar pestaña actual
+            const sheetIndex = cache.workbook.SheetNames.indexOf(sheetName);
+            const activeTab = document.getElementById(`tab-${fileId}-${sheetIndex}`);
+            if (activeTab) {
+                activeTab.classList.add('bg-gray-700', 'text-white', 'border-b-2', 'border-green-500');
+                activeTab.classList.remove('text-gray-400');
+            }
+
+            // Renderizar nueva hoja
+            content.innerHTML = renderExcelSheet(cache.workbook, sheetName);
+            cache.currentSheet = sheetName;
         }
 
         function hidePreviewModal() {
@@ -1064,16 +1374,32 @@
             const renameId = document.getElementById('renameId');
             const renameType = document.getElementById('renameType');
             const renameName = document.getElementById('renameName');
+            const renameExtension = document.getElementById('renameExtension'); // NUEVO
 
             if (renameId) renameId.value = id;
             if (renameType) renameType.value = type;
             if (renameName) {
-                renameName.value = currentName;
+                // Extraer nombre sin extensión
+                const lastDot = currentName.lastIndexOf('.');
+                const nameWithoutExt = lastDot > 0 ? currentName.substring(0, lastDot) : currentName;
+                const extension = lastDot > 0 ? currentName.substring(lastDot) : '';
+
+                renameName.value = nameWithoutExt;
+
+                // Mostrar extensión como sufijo visual
+                if (renameExtension && extension) {
+                    renameExtension.textContent = extension;
+                    renameExtension.classList.remove('hidden');
+                } else if (renameExtension) {
+                    renameExtension.classList.add('hidden');
+                }
+
                 renameName.focus();
                 renameName.select();
             }
             document.getElementById('renameModal')?.classList.remove('hidden');
         }
+
         function hideRenameModal() {
             document.getElementById('renameModal')?.classList.add('hidden');
         }

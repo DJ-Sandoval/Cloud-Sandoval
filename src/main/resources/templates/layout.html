@@ -7,6 +7,9 @@
     <title th:text="${title} ?: 'Nube Sandoval'">Nube Sandoval</title>
     <link rel="icon" type="image/png" sizes="32x32" href="/img/cloud.png">
     <link rel="shortcut icon" href="/img/cloud.png">
+
+    <!-- Librerías externas (deben cargarse primero) -->
+    <script src="https://cdn.sheetjs.com/xlsx-0.20.1/package/dist/xlsx.full.min.js"></script>
     <script src="https://cdn.tailwindcss.com"></script>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
 
@@ -32,7 +35,7 @@
         }
         @keyframes slideIn {
             from { transform: translateX(-20px); opacity: 0; }
-            to { transform: translateX(0); opacity: 1); }
+            to { transform: translateX(0); opacity: 1; }  /* ❌ Antes: opacity: 1); */
         }
         @keyframes slideDown {
             from { transform: translateY(-10px); opacity: 0; }
@@ -63,6 +66,16 @@
             z-index: 9999;
             min-width: 300px;
             max-width: 400px;
+        }
+
+        /* Estilos adicionales para el preview de Excel */
+        .excel-preview-table {
+            font-size: 0.875rem;
+        }
+        .excel-preview-table td, .excel-preview-table th {
+            max-width: 300px;
+            overflow: hidden;
+            text-overflow: ellipsis;
         }
     </style>
 </head>
@@ -101,7 +114,7 @@
 <!-- Modales -->
 <div th:replace="~{fragments/modals :: modals}"></div>
 
-<!-- Scripts -->
+<!-- Scripts (se cargan después de las librerías) -->
 <div th:replace="~{fragments/scripts :: scripts}"></div>
 
 <!-- Variables del Servidor -->
@@ -111,6 +124,13 @@
         storageUsage: /*[[${storageUsage}]]*/ 0,
         apiBasePath: /*[[@{/}]]*/ '/'
     };
+
+    // Verificar que SheetJS se cargó correctamente
+    if (typeof XLSX === 'undefined') {
+        console.error('SheetJS no se cargó correctamente');
+    } else {
+        console.log('SheetJS cargado correctamente, versión:', XLSX.version);
+    }
 </script>
 </body>
 </html>
