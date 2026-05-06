@@ -1,30 +1,79 @@
-# Cloud-Sandoval
+DESARROLLO
+a) Descripción de la problemática
+En la actualidad, el almacenamiento de archivos en la nube se ha convertido en una necesidad para muchas personas y familias. Sin embargo, los servicios como Google Drive, OneDrive o Dropbox representan un costo mensual recurrente que, a largo plazo, resulta significativo para hogares de ingresos medios o bajos.
+El contexto de esta problemática se presenta en un hogar particular de la ciudad de Colima, donde un vecino decidió dejar de pagar suscripciones de almacenamiento en la nube debido al incremento constante de precios. Actualmente, este usuario almacena sus archivos importantes (documentos personales, fotos familiares, videos, proyectos y respaldos) en diversos dispositivos (computadora, discos duros externos y memorias USB), lo que genera desorganización, riesgo de pérdida de información y dificultad para acceder a sus archivos desde diferentes dispositivos.
+La solución actual es manual y poco eficiente: copiar archivos entre dispositivos, utilizar correos electrónicos para enviarse documentos a sí mismo o depender de memorias USB que pueden dañarse o extraviarse. Esto genera pérdida de tiempo, riesgo de pérdida de datos y falta de accesibilidad remota.
+Personas afectadas: Principalmente el jefe de familia y otros miembros del hogar que necesitan acceder a los mismos archivos desde sus teléfonos celulares o computadoras.
+b) Justificación
+Esta problemática puede resolverse eficientemente mediante una solución de software porque existe la posibilidad técnica y económica de crear una Nube Casera (Self-Hosted Cloud) utilizando hardware accesible como una Raspberry Pi 4/5, un disco duro o memoria USB de alta capacidad y software desarrollado específicamente para este propósito.
+La implementación de esta plataforma web permitiría:
 
-HomeCloud FS — Tu Nube Privada, Inteligente y Sin Límites
-HomeCloud FS es una solución de software que convierte una computadora doméstica con almacenamiento externo en una nube privada de alto rendimiento. Está diseñada para usuarios que manejan grandes volúmenes de datos personales —fotos, documentos, proyectos— y buscan una alternativa gratuita, segura y sin restricciones a los servicios comerciales de suscripción mensual.
+Centralizar todo el almacenamiento en un solo lugar.
+Acceder a los archivos desde cualquier dispositivo con conexión a la red local o remota (vía internet).
+Organizar archivos en carpetas y subcarpetas.
+Etiquetar archivos para búsquedas avanzadas.
+Subir archivos grandes mediante carga en chunks.
+Generar vistas previas (previews) de documentos, PDFs e imágenes.
+Evitar completamente los costos mensuales de suscripciones.
 
-Esta API REST es el núcleo de gestión de HomeCloud FS. Administra de forma inteligente el sistema de archivos y metadatos, exponiendo toda la potencia del motor de búsqueda, etiquetado y control de versiones.
+Beneficios esperados:
 
-🧠 Más que un sistema de archivos
-A diferencia de un simple share de red, HomeCloud FS implementa una arquitectura de dos capas:
+Ahorro económico significativo a mediano y largo plazo.
+Mayor control y privacidad de los datos (no dependen de empresas externas).
+Mejora en la organización y accesibilidad de la información familiar.
+Experiencia similar a Google Drive pero de forma local y gratuita.
 
-Disco físico: para el almacenamiento binario puro de los archivos.
+c) Identificación de involucrados
 
-Base de datos relacional: para la gestión inteligente de metadatos, que habilita búsquedas avanzadas, etiquetado personalizado, control de versiones de archivos y una experiencia web interactiva.
-
-🔐 Acceso Remoto Zero-Trust
-El acceso remoto seguro se garantiza mediante una red overlay Zero-Trust (Tailscale), eliminando por completo la necesidad de abrir puertos en el router o configurar complejas VPNs. Tus datos viajan cifrados y solo son accesibles para ti y las personas que autorices.
-
-🎯 El problema que resuelve
-Saturación de almacenamiento local no gestionado: discos externos llenos de datos sin clasificar, duplicados o inaccesibles.
-
-Dependencia de suscripciones costosas: librarte de las cuotas mensuales y límites artificiales de almacenamiento.
-
-Pérdida de control sobre tus datos: con HomeCloud FS, eres el único propietario y administrador de tu información.
-
-Con HomeCloud FS, el usuario recupera el control absoluto de sus datos, combinando la potencia de búsqueda de un gestor documental con la ubicuidad de una nube privada.
-
-🧩 Para la sección "About" del repo (opcional, queda muy limpio)
-REST API to manage a private cloud · Two-layer architecture (binary + metadata) · Advanced search, tagging & versioning · Zero-Trust remote access (Tailscale) · Free & self-hosted alternative to commercial clouds.
+Cliente: Vecino (propietario del proyecto y quien solicitó el desarrollo). Es quien financia el hardware (Raspberry Pi, disco duro) y define los requerimientos principales.
+Usuarios principales: Miembros del hogar (familiares). Usarán el sistema diariamente para subir, descargar, organizar y visualizar archivos.
+Involucrados secundarios:
+Desarrollador (yo y mi equipo).
+Administrador del sistema (el cliente, quien tendrá acceso total).
+Posibles futuros usuarios si se escala el proyecto a otros hogares o pequeñas empresas.
 
 
+d) Necesidades detectadas
+Las principales necesidades identificadas son:
+
+Almacenamiento centralizado de archivos de diferentes tipos y tamaños.
+Organización jerárquica mediante directorios y subdirectorios.
+Sistema de etiquetas para facilitar la búsqueda y clasificación de archivos.
+Acceso web desde cualquier dispositivo (computadora, celular o tablet).
+Subida de archivos grandes de forma confiable (soporte para carga en chunks).
+Vista previa de archivos (imágenes, PDFs, documentos de texto y Excel).
+Búsqueda rápida de archivos por nombre o etiquetas.
+Seguridad básica y control de acceso.
+
+Nivel de interacción esperado con el sistema:
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+UsuarioNivel de interacciónJustificaciónJefe de familia (Cliente)AltaUso diario, administrador del sistemaFamiliaresAltaAcceso frecuente a fotos, documentos y archivosUsuario ocasionalMediaAcceso esporádicoAdministrador técnicoAltaMantenimiento del servidor
